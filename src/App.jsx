@@ -853,7 +853,27 @@ function simulatePing(devices, links, sourceDeviceId, destinationIp) {
   const firstHop = arpResolve(source, sourceNic, nextHopIp);
   if (!firstHop) return { ok: false, trace, updates, visual };
 
+  const staticNatAlias =
+    firstHop.device.type === 'router' && firstHop.nic.natRole === 'outside'
+      ? (firstHop.device.staticNatRules || []).find((rule) => rule.enabled !== false && rule.protocol === 'ICMP' && rule.insideIp === destinationIp)
+      : null;
+  if (staticNatAlias) {
+    trace.push(`${source.name} targeted inside-local IP ${destinationIp}; ${firstHop.device.name} uses static NAT outside address ${staticNatAlias.outsideIp}.`);
+    const forwardResult = deliverFromRouter(firstHop.device, firstHop.nic.id, { sourceIp: sourceNic.ip, destinationIp: staticNatAlias.outsideIp, icmpId, reply: false });
+    if (!forwardResult?.ok) return { ok: false, trace, updates, visual };
+    const ok = sendReply(forwardResult.finalTarget, forwardResult.finalNic, forwardResult.packet);
+    return { ok, trace, updates, visual };
+  }
+
   if (firstHop.nic.ip === destinationIp) {
+    const staticNatOnRouter = firstHop.device.type === 'router' && (firstHop.device.staticNatRules || []).some((rule) => rule.enabled !== false && rule.protocol === 'ICMP' && rule.outsideIp === destinationIp);
+    if (staticNatOnRouter) {
+      trace.push(`${firstHop.device.name} owns ${destinationIp}, but a static NAT rule also maps that outside address; treating this as inbound NAT traffic.`);
+      const forwardResult = deliverFromRouter(firstHop.device, firstHop.nic.id, { sourceIp: sourceNic.ip, destinationIp, icmpId, reply: false });
+      if (!forwardResult?.ok) return { ok: false, trace, updates, visual };
+      const ok = sendReply(forwardResult.finalTarget, forwardResult.finalNic, forwardResult.packet);
+      return { ok, trace, updates, visual };
+    }
     trace.push(`ICMP echo reaches ${firstHop.device.name}; echo reply is delivered on the same Ethernet segment.`);
     updates.push({ deviceId: firstHop.device.id, ip: sourceNic.ip, mac: sourceNic.mac });
     markOk([firstHop.device.id]);
