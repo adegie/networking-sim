@@ -130,7 +130,7 @@ h3 {
 .quick-actions {
   display: grid;
   gap: 0.6rem;
-  grid-template-columns: 150px auto;
+  grid-template-columns: 150px auto auto auto;
 }
 
 .workspace {

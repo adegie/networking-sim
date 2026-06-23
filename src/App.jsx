@@ -335,6 +335,47 @@ function applyArpUpdates(devices, updates) {
   });
 }
 
+function validateTopologyPayload(payload) {
+  const topology = payload?.devices && payload?.links ? payload : payload?.topology;
+  if (!topology || !Array.isArray(topology.devices) || !Array.isArray(topology.links)) {
+    throw new Error('Clipboard JSON must contain devices and links arrays.');
+  }
+
+  const deviceIds = new Set();
+  const interfaceIds = new Set();
+  for (const device of topology.devices) {
+    if (!device?.id || !DEVICE_TYPES[device.type] || !Array.isArray(device.interfaces)) {
+      throw new Error('At least one device is missing id, type, or interfaces.');
+    }
+    if (deviceIds.has(device.id)) throw new Error(`Duplicate device id: ${device.id}`);
+    deviceIds.add(device.id);
+    for (const nic of device.interfaces) {
+      if (!nic?.id) throw new Error(`${device.name || device.id} has an interface without an id.`);
+      interfaceIds.add(`${device.id}:${nic.id}`);
+    }
+  }
+
+  for (const item of topology.links) {
+    if (!item?.id || !item.a || !item.b) throw new Error('At least one link is malformed.');
+    if (!interfaceIds.has(endpointKey(item.a)) || !interfaceIds.has(endpointKey(item.b))) {
+      throw new Error(`Link ${item.id} references a missing interface.`);
+    }
+  }
+
+  return {
+    devices: topology.devices.map((device) => ({
+      ...device,
+      name: device.name || device.id,
+      x: Number.isFinite(device.x) ? device.x : 80,
+      y: Number.isFinite(device.y) ? device.y : 80,
+      gateway: device.gateway || '',
+      arp: device.arp || {},
+      routes: Array.isArray(device.routes) ? device.routes : [],
+    })),
+    links: topology.links,
+  };
+}
+
 function App() {
   const [devices, setDevices] = useState(INITIAL_DEVICES);
   const [links, setLinks] = useState(INITIAL_LINKS);
@@ -489,6 +530,51 @@ function App() {
     ]);
   };
 
+  const exportTopology = async () => {
+    const payload = {
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      devices,
+      links,
+    };
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
+      setLog((items) => [
+        { id: `log-${Date.now()}`, ok: true, title: 'Topology exported', lines: ['JSON topology copied to clipboard.'] },
+        ...items,
+      ]);
+    } catch (error) {
+      setLog((items) => [
+        { id: `log-${Date.now()}`, ok: false, title: 'Export failed', lines: [error.message || 'Clipboard write failed.'] },
+        ...items,
+      ]);
+    }
+  };
+
+  const loadTopology = async () => {
+    try {
+      const text = await navigator.clipboard.readText();
+      const imported = validateTopologyPayload(JSON.parse(text));
+      if (!window.confirm('Replace the current topology with the JSON from your clipboard?')) return;
+      const firstDevice = imported.devices[0];
+      const firstPingSource = imported.devices.find((device) => device.type !== 'switch') || firstDevice;
+      setDevices(imported.devices);
+      setLinks(imported.links);
+      setSelectedId(firstDevice?.id || '');
+      setLinkDraft({ fromDevice: '', fromInterface: '', toDevice: '', toInterface: '' });
+      setPingDraft((current) => ({ ...current, source: firstPingSource?.id || '', destination: current.destination }));
+      setLog((items) => [
+        { id: `log-${Date.now()}`, ok: true, title: 'Topology loaded', lines: [`Loaded ${imported.devices.length} devices and ${imported.links.length} links from clipboard.`] },
+        ...items,
+      ]);
+    } catch (error) {
+      setLog((items) => [
+        { id: `log-${Date.now()}`, ok: false, title: 'Load failed', lines: [error.message || 'Clipboard JSON could not be loaded.'] },
+        ...items,
+      ]);
+    }
+  };
+
   return (
     <main className="app-shell">
       <header className="top-bar">
@@ -500,6 +586,8 @@ function App() {
             ))}
           </select>
           <button onClick={addDevice}>Add device</button>
+          <button className="ghost" onClick={exportTopology}>Export JSON</button>
+          <button className="ghost" onClick={loadTopology}>Load JSON</button>
         </div>
       </header>
 
