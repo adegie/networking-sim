@@ -59,11 +59,12 @@ const INITIAL_DEVICES = [
     y: 170,
     gateway: '',
     interfaces: [
-      iface('r-1', 0, 'g0/0', '192.168.10.1', '255.255.255.0'),
-      iface('r-1', 1, 'g0/1', '10.0.0.1', '255.255.255.0'),
+      { ...iface('r-1', 0, 'g0/0', '192.168.10.1', '255.255.255.0'), natRole: 'inside' },
+      { ...iface('r-1', 1, 'g0/1', '10.0.0.1', '255.255.255.0'), natRole: 'outside' },
     ],
     arp: {},
     routes: [],
+    natTranslations: [],
   },
   {
     id: 'pc-b',
@@ -303,6 +304,10 @@ function firstConfiguredIp(device) {
   return device?.interfaces.find((nic) => nic.ip)?.ip || '';
 }
 
+function natTranslationId(insideIp, outsideIp, destinationIp) {
+  return `${insideIp}->${outsideIp}:${destinationIp}:icmp`;
+}
+
 function simulatePing(devices, links, sourceDeviceId, destinationIp) {
   const trace = [];
   const visual = { nodes: {}, links: {} };
@@ -335,6 +340,23 @@ function simulatePing(devices, links, sourceDeviceId, destinationIp) {
   const updates = [];
   const visitedRouters = new Set();
 
+  const applyNatIfNeeded = (router, incomingInterfaceId, outgoingNic, packet) => {
+    const incomingNic = router.interfaces.find((nic) => nic.id === incomingInterfaceId);
+    if (incomingNic?.natRole !== 'inside' || outgoingNic?.natRole !== 'outside' || !outgoingNic.ip) return packet;
+    if (packet.sourceIp === outgoingNic.ip) return packet;
+
+    const translation = {
+      id: natTranslationId(packet.sourceIp, outgoingNic.ip, packet.destinationIp),
+      insideIp: packet.sourceIp,
+      outsideIp: outgoingNic.ip,
+      destinationIp: packet.destinationIp,
+      protocol: 'ICMP',
+    };
+    trace.push(`${router.name} applies source NAT: ${packet.sourceIp} -> ${outgoingNic.ip} (${incomingNic.name} inside to ${outgoingNic.name} outside).`);
+    updates.push({ kind: 'nat', deviceId: router.id, translation });
+    return { ...packet, sourceIp: outgoingNic.ip, nat: { routerName: router.name, ...translation } };
+  };
+
   const arpResolve = (device, nic, targetIp) => {
     const endpoint = { deviceId: device.id, interfaceId: nic.id };
     const existing = device.arp[targetIp];
@@ -355,7 +377,7 @@ function simulatePing(devices, links, sourceDeviceId, destinationIp) {
     return target;
   };
 
-  const deliverFromRouter = (router, destination) => {
+  const deliverFromRouter = (router, destination, incomingInterfaceId, packet) => {
     if (visitedRouters.has(router.id)) {
       trace.push(`Routing loop detected at ${router.name}.`);
       markError([router.id]);
@@ -367,9 +389,13 @@ function simulatePing(devices, links, sourceDeviceId, destinationIp) {
     const directNic = router.interfaces.find((nic) => nic.ip && nic.mask && sameSubnet(nic.ip, nic.mask, destination));
     if (directNic) {
       trace.push(`${router.name} has connected route ${networkOf(directNic.ip, directNic.mask)}/${maskBits(directNic.mask)} via ${directNic.name}.`);
+      const forwardedPacket = applyNatIfNeeded(router, incomingInterfaceId, directNic, packet);
       const finalTarget = arpResolve(router, directNic, destination);
       if (!finalTarget) return false;
-      trace.push(`ICMP echo reaches ${finalTarget.device.name}; echo reply follows the reverse path.`);
+      trace.push(`ICMP echo reaches ${finalTarget.device.name} from ${forwardedPacket.sourceIp}; echo reply follows the reverse path.`);
+      if (forwardedPacket.nat) {
+        trace.push(`${forwardedPacket.nat.routerName} maps the reply for ${forwardedPacket.nat.outsideIp} back to ${forwardedPacket.nat.insideIp}.`);
+      }
       updates.push({ deviceId: finalTarget.device.id, ip: directNic.ip, mac: directNic.mac });
       markOk([finalTarget.device.id]);
       return true;
@@ -388,6 +414,7 @@ function simulatePing(devices, links, sourceDeviceId, destinationIp) {
       return false;
     }
     trace.push(`${router.name} forwards by static route ${route.network}/${route.mask} toward ${route.nextHop}.`);
+    const forwardedPacket = applyNatIfNeeded(router, incomingInterfaceId, outgoingNic, packet);
     const nextHop = arpResolve(router, outgoingNic, route.nextHop);
     if (!nextHop) return false;
     if (nextHop.device.type !== 'router') {
@@ -395,7 +422,7 @@ function simulatePing(devices, links, sourceDeviceId, destinationIp) {
       markError([nextHop.device.id]);
       return false;
     }
-    return deliverFromRouter(nextHop.device, destination);
+    return deliverFromRouter(nextHop.device, destination, nextHop.nic.id, forwardedPacket);
   };
 
   const nextHopIp = sameSubnet(sourceNic.ip, sourceNic.mask, destinationIp) ? destinationIp : source.gateway;
@@ -426,20 +453,27 @@ function simulatePing(devices, links, sourceDeviceId, destinationIp) {
     return { ok: false, trace, updates, visual };
   }
 
-  const ok = deliverFromRouter(firstHop.device, destinationIp);
+  const ok = deliverFromRouter(firstHop.device, destinationIp, firstHop.nic.id, { sourceIp: sourceNic.ip, destinationIp });
   return { ok, trace, updates, visual };
 }
 
 function applyArpUpdates(devices, updates) {
   if (!updates.length) return devices;
   return devices.map((device) => {
-    const entries = updates.filter((item) => item.deviceId === device.id);
-    if (!entries.length) return device;
+    const entries = updates.filter((item) => item.deviceId === device.id && item.kind !== 'nat');
+    const natEntries = updates.filter((item) => item.deviceId === device.id && item.kind === 'nat');
+    if (!entries.length && !natEntries.length) return device;
     const nextArp = { ...device.arp };
     entries.forEach((item) => {
       nextArp[item.ip] = item.mac;
     });
-    return { ...device, arp: nextArp };
+    const nextNatTranslations = [...(device.natTranslations || [])];
+    natEntries.forEach((item) => {
+      if (!nextNatTranslations.some((translation) => translation.id === item.translation.id)) {
+        nextNatTranslations.push(item.translation);
+      }
+    });
+    return { ...device, arp: nextArp, natTranslations: nextNatTranslations };
   });
 }
 
@@ -479,6 +513,7 @@ function validateTopologyPayload(payload) {
       gateway: device.gateway || '',
       arp: device.arp || {},
       routes: Array.isArray(device.routes) ? device.routes : [],
+      natTranslations: Array.isArray(device.natTranslations) ? device.natTranslations : [],
     })),
     links: topology.links,
   };
@@ -566,6 +601,7 @@ function App() {
       interfaces: Array.from({ length: typeInfo.defaultPorts }, (_, index) => iface(id, index, typeOverride === 'switch' ? `fa0/${index + 1}` : `eth${index}`)),
       arp: {},
       routes: [],
+      natTranslations: [],
     };
     setDevices((items) => [...items, created]);
     setSelectedId(id);
@@ -593,6 +629,7 @@ function App() {
         mac: deterministicMac(`${id}-${index}`),
       })),
       arp: { ...source.arp },
+      natTranslations: [],
       routes: source.routes.map((route) => ({
         ...route,
         id: `${route.id}-${Date.now().toString(36)}`,
@@ -644,6 +681,10 @@ function App() {
   const clearDeviceArp = (deviceId) => {
     setDevices((items) => items.map((device) => (device.id === deviceId ? { ...device, arp: {} } : device)));
     setContextMenu(null);
+  };
+
+  const clearNatTranslations = (deviceId) => {
+    setDevices((items) => items.map((device) => (device.id === deviceId ? { ...device, natTranslations: [] } : device)));
   };
 
   const setPingSource = (deviceId) => {
@@ -963,6 +1004,7 @@ function App() {
               onRemoveDevice={removeDevice}
               onAddArp={addManualArp}
               onClearArp={clearArp}
+              onClearNat={clearNatTranslations}
               onAddRoute={addRoute}
               onUpdateRoute={updateRoute}
               onRemoveRoute={removeRoute}
@@ -1065,7 +1107,7 @@ function TopologyContextMenu({ menu, device, selectedDevice, canPatchCable, canP
   );
 }
 
-function DeviceEditor({ device, links, occupied, onUpdate, onUpdateInterface, onAddInterface, onRemoveDevice, onAddArp, onClearArp, onAddRoute, onUpdateRoute, onRemoveRoute }) {
+function DeviceEditor({ device, links, occupied, onUpdate, onUpdateInterface, onAddInterface, onRemoveDevice, onAddArp, onClearArp, onClearNat, onAddRoute, onUpdateRoute, onRemoveRoute }) {
   return (
     <div className="panel device-editor">
       <div className="card-heading compact">
@@ -1105,7 +1147,7 @@ function DeviceEditor({ device, links, occupied, onUpdate, onUpdateInterface, on
                 <input value={nic.name} onChange={(event) => onUpdateInterface(device.id, nic.id, { name: event.target.value })} />
                 <span className={connected ? 'status live' : 'status'}>{connected ? 'linked' : 'down'}</span>
               </div>
-              <div className={device.type === 'switch' ? 'interface-fields switch-fields' : 'interface-fields'}>
+              <div className={device.type === 'switch' ? 'interface-fields switch-fields' : device.type === 'router' ? 'interface-fields router-fields' : 'interface-fields'}>
                 <label>
                   MAC
                   <input value={nic.mac} onChange={(event) => onUpdateInterface(device.id, nic.id, { mac: event.target.value })} />
@@ -1120,6 +1162,16 @@ function DeviceEditor({ device, links, occupied, onUpdate, onUpdateInterface, on
                       Mask
                       <input value={nic.mask} onChange={(event) => onUpdateInterface(device.id, nic.id, { mask: event.target.value })} placeholder="255.255.255.0 or /24" />
                     </label>
+                    {device.type === 'router' && (
+                      <label>
+                        NAT role
+                        <select value={nic.natRole || ''} onChange={(event) => onUpdateInterface(device.id, nic.id, { natRole: event.target.value })}>
+                          <option value="">None</option>
+                          <option value="inside">Inside</option>
+                          <option value="outside">Outside</option>
+                        </select>
+                      </label>
+                    )}
                   </>
                 )}
               </div>
@@ -1149,6 +1201,23 @@ function DeviceEditor({ device, links, occupied, onUpdate, onUpdateInterface, on
               </div>
             ))}
             {!device.routes.length && <p className="muted">Connected routes are inferred from router interfaces.</p>}
+          </div>
+        </section>
+      )}
+
+      {device.type === 'router' && (
+        <section>
+          <div className="section-title">
+            <h3>NAT Table</h3>
+            <button className="ghost" onClick={() => onClearNat(device.id)}>Clear NAT</button>
+          </div>
+          <div className="table-list">
+            {(device.natTranslations || []).map((translation) => (
+              <div key={translation.id} className="row-item single">
+                {translation.protocol} {translation.insideIp} <b>as</b> {translation.outsideIp} <b>to</b> {translation.destinationIp}
+              </div>
+            ))}
+            {!(device.natTranslations || []).length && <p className="muted">No NAT translations yet. Mark one interface inside and another outside, then ping across them.</p>}
           </div>
         </section>
       )}
