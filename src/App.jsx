@@ -697,6 +697,11 @@ function App() {
     ]);
   };
 
+  const clearPacketTrace = () => {
+    setLog([]);
+    setPingVisual({ nodes: {}, links: {} });
+  };
+
   const exportTopology = async () => {
     const payload = {
       version: 1,
@@ -877,7 +882,7 @@ function App() {
         <div className="panel log-panel">
           <div className="card-heading compact">
             <h2>Packet Trace</h2>
-            <button className="ghost" onClick={() => setLog([])}>Clear</button>
+            <button className="ghost" onClick={clearPacketTrace}>Clear</button>
           </div>
           <div className="log-stack">
             {log.map((entry) => (
