@@ -19,11 +19,33 @@ const INITIAL_DEVICES = [
     routes: [],
   },
   {
+    id: 'pc-c',
+    type: 'host',
+    name: 'Workstation C',
+    x: 110,
+    y: 250,
+    gateway: '192.168.10.1',
+    interfaces: [iface('pc-c', 0, 'eth0', '192.168.10.11', '255.255.255.0')],
+    arp: {},
+    routes: [],
+  },
+  {
+    id: 'pc-d',
+    type: 'host',
+    name: 'Workstation D',
+    x: 110,
+    y: 370,
+    gateway: '192.168.10.1',
+    interfaces: [iface('pc-d', 0, 'eth0', '192.168.10.12', '255.255.255.0')],
+    arp: {},
+    routes: [],
+  },
+  {
     id: 'sw-1',
     type: 'switch',
     name: 'Access Switch',
     x: 390,
-    y: 170,
+    y: 250,
     gateway: '',
     interfaces: Array.from({ length: 6 }, (_, index) => iface('sw-1', index, `fa0/${index + 1}`)),
     arp: {},
@@ -58,7 +80,9 @@ const INITIAL_DEVICES = [
 
 const INITIAL_LINKS = [
   link('pc-a', 'pc-a-if-0', 'sw-1', 'sw-1-if-0'),
-  link('sw-1', 'sw-1-if-1', 'r-1', 'r-1-if-0'),
+  link('pc-c', 'pc-c-if-0', 'sw-1', 'sw-1-if-1'),
+  link('pc-d', 'pc-d-if-0', 'sw-1', 'sw-1-if-2'),
+  link('sw-1', 'sw-1-if-3', 'r-1', 'r-1-if-0'),
   link('r-1', 'r-1-if-1', 'pc-b', 'pc-b-if-0'),
 ];
 
