@@ -9,6 +9,15 @@ npm install
 npm run dev
 ```
 
+## GitHub Pages Build
+
+```bash
+npm run build:pages
+npm run preview:pages
+```
+
+Use `preview:pages` to inspect the generated `publish/` output locally. Opening `publish/index.html` directly can look different because browsers keep separate zoom settings for `file://`, `localhost`, and GitHub Pages origins.
+
 ## Included Simulation Concepts
 
 - Ethernet links and switch broadcast domains
