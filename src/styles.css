@@ -262,9 +262,10 @@ h3 {
   font-size: 0.72rem;
 }
 
-.node.selected {
-  border-color: #2563eb;
-  outline: 3px solid rgba(37, 99, 235, 0.14);
+.node:hover {
+  background: #f8fafc;
+  border-color: #94a3b8;
+  outline: 2px solid rgba(100, 116, 139, 0.16);
 }
 
 .node.success {
@@ -277,6 +278,20 @@ h3 {
   background: #fff1f2;
   border-color: #dc2626;
   outline: 3px solid rgba(220, 38, 38, 0.16);
+}
+
+.node.selected {
+  background: #eff6ff;
+  border: 2px solid #2563eb;
+  border-left: 7px solid #2563eb;
+  outline: 4px solid rgba(37, 99, 235, 0.22);
+  box-shadow: 0 0 0 1px #ffffff inset, 0 8px 18px rgba(37, 99, 235, 0.16);
+}
+
+.node.selected span {
+  background: #dbeafe;
+  border-color: #2563eb;
+  color: #1d4ed8;
 }
 
 .context-menu {

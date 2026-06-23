@@ -603,6 +603,35 @@ function App() {
     setContextMenu(null);
   };
 
+  const getFreeInterface = (deviceId, occupiedSet = occupied) => {
+    const device = getDevice(devices, deviceId);
+    return device?.interfaces.find((nic) => !occupiedSet.has(endpointKey({ deviceId, interfaceId: nic.id })));
+  };
+
+  const patchCableBetween = (sourceDeviceId, targetDeviceId) => {
+    if (!sourceDeviceId || !targetDeviceId || sourceDeviceId === targetDeviceId) return;
+    const currentOccupied = occupiedInterfaces(links);
+    const sourceNic = getFreeInterface(sourceDeviceId, currentOccupied);
+    const targetNic = getFreeInterface(targetDeviceId, currentOccupied);
+    const sourceDevice = getDevice(devices, sourceDeviceId);
+    const targetDevice = getDevice(devices, targetDeviceId);
+    if (!sourceNic || !targetNic || !sourceDevice || !targetDevice) {
+      setLog((items) => [
+        { id: `log-${Date.now()}`, ok: false, title: 'Patch cable failed', lines: ['Both devices need at least one free port.'] },
+        ...items,
+      ]);
+      setContextMenu(null);
+      return;
+    }
+    setLinks((items) => [...items, link(sourceDeviceId, sourceNic.id, targetDeviceId, targetNic.id)]);
+    setPingVisual({ nodes: {}, links: {} });
+    setLog((items) => [
+      { id: `log-${Date.now()}`, ok: true, title: 'Patch cable added', lines: [`Connected ${sourceDevice.name}:${sourceNic.name} to ${targetDevice.name}:${targetNic.name}.`] },
+      ...items,
+    ]);
+    setContextMenu(null);
+  };
+
   const getBoardPoint = (event) => {
     const rect = boardRef.current.getBoundingClientRect();
     return {
@@ -619,8 +648,7 @@ function App() {
   const openDeviceMenu = (event, deviceId) => {
     event.preventDefault();
     event.stopPropagation();
-    setSelectedId(deviceId);
-    setContextMenu({ kind: 'device', x: event.clientX, y: event.clientY, deviceId });
+    setContextMenu({ kind: 'device', x: event.clientX, y: event.clientY, deviceId, selectedDeviceId: selectedId });
   };
 
   const addLink = () => {
@@ -809,11 +837,20 @@ function App() {
               <TopologyContextMenu
                 menu={contextMenu}
                 device={contextMenu.deviceId ? getDevice(devices, contextMenu.deviceId) : null}
+                selectedDevice={contextMenu.selectedDeviceId ? getDevice(devices, contextMenu.selectedDeviceId) : null}
+                canPatchCable={Boolean(
+                  contextMenu.deviceId &&
+                    contextMenu.selectedDeviceId &&
+                    contextMenu.deviceId !== contextMenu.selectedDeviceId &&
+                    getFreeInterface(contextMenu.selectedDeviceId) &&
+                    getFreeInterface(contextMenu.deviceId)
+                )}
                 onAddDevice={addDevice}
                 onSelectDevice={(deviceId) => {
                   setSelectedId(deviceId);
                   setContextMenu(null);
                 }}
+                onPatchCable={patchCableBetween}
                 onSetPingSource={setPingSource}
                 onAddInterface={addInterface}
                 onDuplicateDevice={duplicateDevice}
@@ -898,7 +935,7 @@ function App() {
   );
 }
 
-function TopologyContextMenu({ menu, device, onAddDevice, onSelectDevice, onSetPingSource, onAddInterface, onDuplicateDevice, onClearArp, onDeleteDevice }) {
+function TopologyContextMenu({ menu, device, selectedDevice, canPatchCable, onAddDevice, onSelectDevice, onPatchCable, onSetPingSource, onAddInterface, onDuplicateDevice, onClearArp, onDeleteDevice }) {
   const style = { left: menu.x, top: menu.y };
 
   if (menu.kind === 'canvas') {
@@ -918,6 +955,11 @@ function TopologyContextMenu({ menu, device, onAddDevice, onSelectDevice, onSetP
   return (
     <div className="context-menu" style={style} onClick={(event) => event.stopPropagation()} onContextMenu={(event) => event.preventDefault()}>
       <strong>{device.name}</strong>
+      {selectedDevice && selectedDevice.id !== device.id && (
+        <button disabled={!canPatchCable} onClick={() => onPatchCable(selectedDevice.id, device.id)}>
+          Patch cable from {selectedDevice.name}
+        </button>
+      )}
       <button onClick={() => onSelectDevice(device.id)}>Select</button>
       {device.type !== 'switch' && <button onClick={() => onSetPingSource(device.id)}>Use as ping source</button>}
       <button onClick={() => onAddInterface(device.id)}>Add port</button>
