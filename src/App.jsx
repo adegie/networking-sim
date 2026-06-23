@@ -387,6 +387,7 @@ function App() {
     { id: 'welcome', ok: true, title: 'Welcome', lines: ['Try pinging 10.0.0.20 from Workstation A, then inspect ARP tables.'] },
   ]);
   const [dragging, setDragging] = useState(null);
+  const [contextMenu, setContextMenu] = useState(null);
   const boardRef = useRef(null);
 
   const selected = devices.find((device) => device.id === selectedId) || devices[0];
@@ -395,6 +396,21 @@ function App() {
   useEffect(() => {
     if (!selected && devices[0]) setSelectedId(devices[0].id);
   }, [devices, selected]);
+
+  useEffect(() => {
+    const closeContextMenu = () => setContextMenu(null);
+    const closeOnEscape = (event) => {
+      if (event.key === 'Escape') setContextMenu(null);
+    };
+    window.addEventListener('click', closeContextMenu);
+    window.addEventListener('resize', closeContextMenu);
+    window.addEventListener('keydown', closeOnEscape);
+    return () => {
+      window.removeEventListener('click', closeContextMenu);
+      window.removeEventListener('resize', closeContextMenu);
+      window.removeEventListener('keydown', closeOnEscape);
+    };
+  }, []);
 
   useEffect(() => {
     const onMove = (event) => {
@@ -413,27 +429,57 @@ function App() {
     };
   }, [dragging]);
 
-  const addDevice = () => {
-    const id = `${newType}-${Date.now().toString(36)}`;
-    const typeInfo = DEVICE_TYPES[newType];
+  const addDevice = (typeOverride = newType, position = null) => {
+    const id = `${typeOverride}-${Date.now().toString(36)}`;
+    const typeInfo = DEVICE_TYPES[typeOverride];
     const created = {
       id,
-      type: newType,
-      name: `${typeInfo.label} ${devices.filter((device) => device.type === newType).length + 1}`,
-      x: 140 + (devices.length % 4) * 180,
-      y: 330 + Math.floor(devices.length / 4) * 115,
+      type: typeOverride,
+      name: `${typeInfo.label} ${devices.filter((device) => device.type === typeOverride).length + 1}`,
+      x: position?.x ?? 140 + (devices.length % 4) * 180,
+      y: position?.y ?? 330 + Math.floor(devices.length / 4) * 115,
       gateway: '',
-      interfaces: Array.from({ length: typeInfo.defaultPorts }, (_, index) => iface(id, index, newType === 'switch' ? `fa0/${index + 1}` : `eth${index}`)),
+      interfaces: Array.from({ length: typeInfo.defaultPorts }, (_, index) => iface(id, index, typeOverride === 'switch' ? `fa0/${index + 1}` : `eth${index}`)),
       arp: {},
       routes: [],
     };
     setDevices((items) => [...items, created]);
     setSelectedId(id);
+    setContextMenu(null);
+  };
+
+  const duplicateDevice = (deviceId) => {
+    const source = getDevice(devices, deviceId);
+    if (!source) return;
+    const id = `${source.type}-${Date.now().toString(36)}`;
+    const interfaceIdByOldId = new Map(source.interfaces.map((nic, index) => [nic.id, `${id}-if-${index}`]));
+    const created = {
+      ...source,
+      id,
+      name: `${source.name} copy`,
+      x: source.x + 36,
+      y: source.y + 36,
+      interfaces: source.interfaces.map((nic, index) => ({
+        ...nic,
+        id: `${id}-if-${index}`,
+        mac: deterministicMac(`${id}-${index}`),
+      })),
+      arp: { ...source.arp },
+      routes: source.routes.map((route) => ({
+        ...route,
+        id: `${route.id}-${Date.now().toString(36)}`,
+        interfaceId: interfaceIdByOldId.get(route.interfaceId) || '',
+      })),
+    };
+    setDevices((items) => [...items, created]);
+    setSelectedId(id);
+    setContextMenu(null);
   };
 
   const removeDevice = (deviceId) => {
     setDevices((items) => items.filter((item) => item.id !== deviceId));
     setLinks((items) => items.filter((item) => item.a.deviceId !== deviceId && item.b.deviceId !== deviceId));
+    setContextMenu(null);
   };
 
   const updateDevice = (deviceId, patch) => {
@@ -459,6 +505,38 @@ function App() {
         return { ...device, interfaces: [...device.interfaces, iface(device.id, index, name)] };
       }),
     );
+    setContextMenu(null);
+  };
+
+  const clearDeviceArp = (deviceId) => {
+    setDevices((items) => items.map((device) => (device.id === deviceId ? { ...device, arp: {} } : device)));
+    setContextMenu(null);
+  };
+
+  const setPingSource = (deviceId) => {
+    setPingDraft((current) => ({ ...current, source: deviceId }));
+    setSelectedId(deviceId);
+    setContextMenu(null);
+  };
+
+  const getBoardPoint = (event) => {
+    const rect = boardRef.current.getBoundingClientRect();
+    return {
+      x: Math.max(20, Math.min(rect.width - 120, event.clientX - rect.left - 56)),
+      y: Math.max(20, Math.min(rect.height - 90, event.clientY - rect.top - 40)),
+    };
+  };
+
+  const openCanvasMenu = (event) => {
+    event.preventDefault();
+    setContextMenu({ kind: 'canvas', x: event.clientX, y: event.clientY, boardPoint: getBoardPoint(event) });
+  };
+
+  const openDeviceMenu = (event, deviceId) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setSelectedId(deviceId);
+    setContextMenu({ kind: 'device', x: event.clientX, y: event.clientY, deviceId });
   };
 
   const addLink = () => {
@@ -585,7 +663,7 @@ function App() {
               <option key={key} value={key}>{value.label}</option>
             ))}
           </select>
-          <button onClick={addDevice}>Add device</button>
+          <button onClick={() => addDevice()}>Add device</button>
           <button className="ghost" onClick={exportTopology}>Export JSON</button>
           <button className="ghost" onClick={loadTopology}>Load JSON</button>
         </div>
@@ -600,7 +678,7 @@ function App() {
             </div>
             <span>{devices.length} devices / {links.length} links</span>
           </div>
-          <div ref={boardRef} className="board">
+          <div ref={boardRef} className="board" onContextMenu={openCanvasMenu}>
             <svg className="links" aria-hidden="true">
               {links.map((item) => {
                 const a = getDevice(devices, item.a.deviceId);
@@ -619,10 +697,12 @@ function App() {
                   style={{ left: device.x, top: device.y, '--accent': type.color }}
                   onClick={() => setSelectedId(device.id)}
                   onPointerDown={(event) => {
+                    if (event.button !== 0) return;
                     event.currentTarget.setPointerCapture(event.pointerId);
                     const rect = event.currentTarget.getBoundingClientRect();
                     setDragging({ id: device.id, offsetX: event.clientX - rect.left, offsetY: event.clientY - rect.top });
                   }}
+                  onContextMenu={(event) => openDeviceMenu(event, device.id)}
                 >
                   <span>{type.icon}</span>
                   <strong>{device.name}</strong>
@@ -630,6 +710,22 @@ function App() {
                 </button>
               );
             })}
+            {contextMenu && (
+              <TopologyContextMenu
+                menu={contextMenu}
+                device={contextMenu.deviceId ? getDevice(devices, contextMenu.deviceId) : null}
+                onAddDevice={addDevice}
+                onSelectDevice={(deviceId) => {
+                  setSelectedId(deviceId);
+                  setContextMenu(null);
+                }}
+                onSetPingSource={setPingSource}
+                onAddInterface={addInterface}
+                onDuplicateDevice={duplicateDevice}
+                onClearArp={clearDeviceArp}
+                onDeleteDevice={removeDevice}
+              />
+            )}
           </div>
         </div>
 
@@ -704,6 +800,36 @@ function App() {
         </div>
       </section>
     </main>
+  );
+}
+
+function TopologyContextMenu({ menu, device, onAddDevice, onSelectDevice, onSetPingSource, onAddInterface, onDuplicateDevice, onClearArp, onDeleteDevice }) {
+  const style = { left: menu.x, top: menu.y };
+
+  if (menu.kind === 'canvas') {
+    return (
+      <div className="context-menu" style={style} onClick={(event) => event.stopPropagation()} onContextMenu={(event) => event.preventDefault()}>
+        <strong>Add device here</strong>
+        <button onClick={() => onAddDevice('host', menu.boardPoint)}>Host</button>
+        <button onClick={() => onAddDevice('switch', menu.boardPoint)}>Switch</button>
+        <button onClick={() => onAddDevice('router', menu.boardPoint)}>Router</button>
+      </div>
+    );
+  }
+
+  if (!device) return null;
+  const arpCount = Object.keys(device.arp || {}).length;
+
+  return (
+    <div className="context-menu" style={style} onClick={(event) => event.stopPropagation()} onContextMenu={(event) => event.preventDefault()}>
+      <strong>{device.name}</strong>
+      <button onClick={() => onSelectDevice(device.id)}>Select</button>
+      {device.type !== 'switch' && <button onClick={() => onSetPingSource(device.id)}>Use as ping source</button>}
+      <button onClick={() => onAddInterface(device.id)}>Add port</button>
+      <button onClick={() => onDuplicateDevice(device.id)}>Duplicate</button>
+      {device.type !== 'switch' && <button disabled={!arpCount} onClick={() => onClearArp(device.id)}>Clear ARP ({arpCount})</button>}
+      <button className="danger-item" onClick={() => onDeleteDevice(device.id)}>Delete</button>
+    </div>
   );
 }
 

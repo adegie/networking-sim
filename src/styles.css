@@ -38,6 +38,13 @@ button:hover {
   background: #1d4ed8;
 }
 
+button:disabled {
+  background: #e2e8f0;
+  border-color: #cbd5e1;
+  color: #94a3b8;
+  cursor: not-allowed;
+}
+
 button.ghost {
   background: #ffffff;
   border-color: #ccd5df;
@@ -248,6 +255,57 @@ h3 {
 .node.selected {
   border-color: #2563eb;
   outline: 3px solid rgba(37, 99, 235, 0.14);
+}
+
+.context-menu {
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
+  border-radius: 0.55rem;
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.18);
+  display: grid;
+  gap: 0.25rem;
+  min-width: 180px;
+  padding: 0.35rem;
+  position: fixed;
+  z-index: 20;
+}
+
+.context-menu strong {
+  border-bottom: 1px solid #e2e8f0;
+  color: #334155;
+  font-size: 0.82rem;
+  margin-bottom: 0.2rem;
+  overflow: hidden;
+  padding: 0.35rem 0.45rem 0.5rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.context-menu button {
+  background: transparent;
+  border: 0;
+  border-radius: 0.35rem;
+  color: #17202a;
+  font-weight: 600;
+  padding: 0.45rem 0.5rem;
+  text-align: left;
+}
+
+.context-menu button:hover {
+  background: #eef2ff;
+}
+
+.context-menu button:disabled {
+  background: transparent;
+  color: #94a3b8;
+}
+
+.context-menu .danger-item {
+  color: #b42332;
+}
+
+.context-menu .danger-item:hover {
+  background: #fff1f2;
 }
 
 .device-editor {
