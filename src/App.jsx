@@ -275,6 +275,10 @@ function chooseSourceInterface(device, destinationIp) {
   );
 }
 
+function firstConfiguredIp(device) {
+  return device?.interfaces.find((nic) => nic.ip)?.ip || '';
+}
+
 function simulatePing(devices, links, sourceDeviceId, destinationIp) {
   const trace = [];
   const visual = { nodes: {}, links: {} };
@@ -474,6 +478,14 @@ function App() {
   const selected = devices.find((device) => device.id === selectedId) || devices[0];
   const occupied = occupiedInterfaces(links);
 
+  const selectDevice = (deviceId) => {
+    const device = getDevice(devices, deviceId);
+    setSelectedId(deviceId);
+    if (device?.type !== 'switch') {
+      setPingDraft((current) => ({ ...current, source: deviceId }));
+    }
+  };
+
   useEffect(() => {
     if (!selected && devices[0]) setSelectedId(devices[0].id);
   }, [devices, selected]);
@@ -526,6 +538,9 @@ function App() {
     };
     setDevices((items) => [...items, created]);
     setSelectedId(id);
+    if (typeOverride !== 'switch') {
+      setPingDraft((current) => ({ ...current, source: id }));
+    }
     setPingVisual({ nodes: {}, links: {} });
     setContextMenu(null);
   };
@@ -555,6 +570,9 @@ function App() {
     };
     setDevices((items) => [...items, created]);
     setSelectedId(id);
+    if (created.type !== 'switch') {
+      setPingDraft((current) => ({ ...current, source: id }));
+    }
     setPingVisual({ nodes: {}, links: {} });
     setContextMenu(null);
   };
@@ -599,7 +617,7 @@ function App() {
 
   const setPingSource = (deviceId) => {
     setPingDraft((current) => ({ ...current, source: deviceId }));
-    setSelectedId(deviceId);
+    selectDevice(deviceId);
     setContextMenu(null);
   };
 
@@ -629,6 +647,42 @@ function App() {
       { id: `log-${Date.now()}`, ok: true, title: 'Patch cable added', lines: [`Connected ${sourceDevice.name}:${sourceNic.name} to ${targetDevice.name}:${targetNic.name}.`] },
       ...items,
     ]);
+    setContextMenu(null);
+  };
+
+  const executePing = (sourceDeviceId, destinationIp) => {
+    const cleanDestination = destinationIp.trim();
+    const result = simulatePing(devices, links, sourceDeviceId, cleanDestination);
+    setDevices((items) => applyArpUpdates(items, result.updates));
+    setPingVisual(result.visual || { nodes: {}, links: {} });
+    setPingDraft((current) => ({ ...current, source: sourceDeviceId, destination: cleanDestination }));
+    const source = getDevice(devices, sourceDeviceId)?.name || 'Unknown';
+    setLog((items) => [
+      {
+        id: `log-${Date.now()}`,
+        ok: result.ok,
+        title: `${source} -> ${cleanDestination} ${result.ok ? 'succeeded' : 'failed'}`,
+        lines: result.trace,
+      },
+      ...items,
+    ]);
+    return result;
+  };
+
+  const pingDeviceFromSelected = (sourceDeviceId, targetDeviceId) => {
+    const source = getDevice(devices, sourceDeviceId);
+    const target = getDevice(devices, targetDeviceId);
+    const destinationIp = firstConfiguredIp(target);
+    if (!source || source.type === 'switch' || !destinationIp) {
+      setLog((items) => [
+        { id: `log-${Date.now()}`, ok: false, title: 'Ping not started', lines: ['Select a host/router source and right-click a host/router with a configured IP.'] },
+        ...items,
+      ]);
+      setContextMenu(null);
+      return;
+    }
+    selectDevice(sourceDeviceId);
+    executePing(sourceDeviceId, destinationIp);
     setContextMenu(null);
   };
 
@@ -710,19 +764,7 @@ function App() {
   };
 
   const runPing = () => {
-    const result = simulatePing(devices, links, pingDraft.source, pingDraft.destination.trim());
-    setDevices((items) => applyArpUpdates(items, result.updates));
-    setPingVisual(result.visual || { nodes: {}, links: {} });
-    const source = getDevice(devices, pingDraft.source)?.name || 'Unknown';
-    setLog((items) => [
-      {
-        id: `log-${Date.now()}`,
-        ok: result.ok,
-        title: `${source} -> ${pingDraft.destination.trim()} ${result.ok ? 'succeeded' : 'failed'}`,
-        lines: result.trace,
-      },
-      ...items,
-    ]);
+    executePing(pingDraft.source, pingDraft.destination);
   };
 
   const clearPacketTrace = () => {
@@ -818,7 +860,7 @@ function App() {
                   key={device.id}
                   className={`node ${selected?.id === device.id ? 'selected' : ''} ${pingVisual.nodes[device.id] || ''}`}
                   style={{ left: device.x, top: device.y, '--accent': type.color }}
-                  onClick={() => setSelectedId(device.id)}
+                  onClick={() => selectDevice(device.id)}
                   onPointerDown={(event) => {
                     if (event.button !== 0) return;
                     event.currentTarget.setPointerCapture(event.pointerId);
@@ -845,12 +887,20 @@ function App() {
                     getFreeInterface(contextMenu.selectedDeviceId) &&
                     getFreeInterface(contextMenu.deviceId)
                 )}
+                canPingDevice={Boolean(
+                  contextMenu.deviceId &&
+                    contextMenu.selectedDeviceId &&
+                    contextMenu.deviceId !== contextMenu.selectedDeviceId &&
+                    getDevice(devices, contextMenu.selectedDeviceId)?.type !== 'switch' &&
+                    firstConfiguredIp(getDevice(devices, contextMenu.deviceId))
+                )}
                 onAddDevice={addDevice}
                 onSelectDevice={(deviceId) => {
-                  setSelectedId(deviceId);
+                  selectDevice(deviceId);
                   setContextMenu(null);
                 }}
                 onPatchCable={patchCableBetween}
+                onPingDevice={pingDeviceFromSelected}
                 onSetPingSource={setPingSource}
                 onAddInterface={addInterface}
                 onDuplicateDevice={duplicateDevice}
@@ -935,7 +985,7 @@ function App() {
   );
 }
 
-function TopologyContextMenu({ menu, device, selectedDevice, canPatchCable, onAddDevice, onSelectDevice, onPatchCable, onSetPingSource, onAddInterface, onDuplicateDevice, onClearArp, onDeleteDevice }) {
+function TopologyContextMenu({ menu, device, selectedDevice, canPatchCable, canPingDevice, onAddDevice, onSelectDevice, onPatchCable, onPingDevice, onSetPingSource, onAddInterface, onDuplicateDevice, onClearArp, onDeleteDevice }) {
   const style = { left: menu.x, top: menu.y };
 
   if (menu.kind === 'canvas') {
@@ -958,6 +1008,11 @@ function TopologyContextMenu({ menu, device, selectedDevice, canPatchCable, onAd
       {selectedDevice && selectedDevice.id !== device.id && (
         <button disabled={!canPatchCable} onClick={() => onPatchCable(selectedDevice.id, device.id)}>
           Patch cable from {selectedDevice.name}
+        </button>
+      )}
+      {selectedDevice && selectedDevice.id !== device.id && (
+        <button disabled={!canPingDevice} onClick={() => onPingDevice(selectedDevice.id, device.id)}>
+          Ping from {selectedDevice.name}
         </button>
       )}
       <button onClick={() => onSelectDevice(device.id)}>Select</button>
