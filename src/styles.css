@@ -1,0 +1,465 @@
+:root {
+  color-scheme: dark;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: #081017;
+  color: #ecf6ff;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at 20% 0%, rgba(70, 213, 151, 0.22), transparent 26rem),
+    radial-gradient(circle at 85% 15%, rgba(90, 167, 255, 0.2), transparent 24rem),
+    #081017;
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+button {
+  border: 0;
+  border-radius: 0.85rem;
+  background: linear-gradient(135deg, #48d597, #31a8ff);
+  color: #041018;
+  cursor: pointer;
+  font-weight: 800;
+  padding: 0.75rem 1rem;
+}
+
+button:hover {
+  filter: brightness(1.07);
+}
+
+button.ghost {
+  background: rgba(255, 255, 255, 0.08);
+  color: #cfe7fa;
+  font-weight: 700;
+  padding: 0.55rem 0.75rem;
+}
+
+button.danger {
+  background: rgba(255, 90, 109, 0.16);
+  color: #ff9ca8;
+}
+
+input,
+select {
+  width: 100%;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 0.75rem;
+  background: rgba(5, 15, 24, 0.82);
+  color: #f4fbff;
+  padding: 0.72rem 0.78rem;
+  outline: none;
+}
+
+input:focus,
+select:focus {
+  border-color: #48d597;
+  box-shadow: 0 0 0 3px rgba(72, 213, 151, 0.16);
+}
+
+label {
+  color: #9eb5c5;
+  display: grid;
+  font-size: 0.78rem;
+  font-weight: 800;
+  gap: 0.42rem;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+h1,
+h2,
+h3,
+p {
+  margin: 0;
+}
+
+h1 {
+  font-size: clamp(2.2rem, 6vw, 5.2rem);
+  letter-spacing: -0.07em;
+  line-height: 0.9;
+  max-width: 900px;
+}
+
+h2 {
+  font-size: 1.04rem;
+}
+
+h3 {
+  color: #e9f7ff;
+  font-size: 0.92rem;
+}
+
+.app-shell {
+  display: grid;
+  gap: 1rem;
+  margin: 0 auto;
+  max-width: 1560px;
+  padding: 1rem;
+}
+
+.hero {
+  align-items: end;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.04));
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 2rem;
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+  min-height: 280px;
+  overflow: hidden;
+  padding: clamp(1.25rem, 4vw, 3rem);
+  position: relative;
+}
+
+.hero::after {
+  background-image: linear-gradient(rgba(255, 255, 255, 0.08) 1px, transparent 1px), linear-gradient(90deg, rgba(255, 255, 255, 0.08) 1px, transparent 1px);
+  background-size: 34px 34px;
+  content: '';
+  inset: 0;
+  mask-image: linear-gradient(90deg, transparent, black 25%, black 70%, transparent);
+  opacity: 0.35;
+  position: absolute;
+  pointer-events: none;
+}
+
+.eyebrow {
+  color: #48d597;
+  font-weight: 900;
+  letter-spacing: 0.22em;
+  margin-bottom: 1rem;
+  text-transform: uppercase;
+}
+
+.hero-copy {
+  color: #b5cbdc;
+  font-size: 1.05rem;
+  line-height: 1.6;
+  margin-top: 1.2rem;
+  max-width: 680px;
+}
+
+.quick-actions {
+  background: rgba(2, 9, 14, 0.68);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 1.3rem;
+  display: grid;
+  gap: 0.7rem;
+  min-width: 220px;
+  padding: 0.85rem;
+  position: relative;
+  z-index: 1;
+}
+
+.workspace {
+  align-items: start;
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: minmax(0, 1fr) 420px;
+}
+
+.canvas-card,
+.panel {
+  background: rgba(9, 21, 32, 0.86);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 1.35rem;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.22);
+}
+
+.canvas-card {
+  overflow: hidden;
+}
+
+.panel {
+  display: grid;
+  gap: 1rem;
+  padding: 1rem;
+}
+
+.card-heading,
+.section-title {
+  align-items: center;
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+  padding: 1rem;
+}
+
+.card-heading p,
+.card-heading span,
+.muted {
+  color: #8299aa;
+  font-size: 0.9rem;
+}
+
+.card-heading.compact {
+  padding: 0;
+}
+
+.section-title {
+  padding: 0;
+}
+
+.board {
+  background:
+    linear-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+    radial-gradient(circle at center, rgba(72, 213, 151, 0.08), transparent 34rem);
+  background-size: 28px 28px, 28px 28px, auto;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  height: 560px;
+  overflow: hidden;
+  position: relative;
+}
+
+.links {
+  height: 100%;
+  inset: 0;
+  position: absolute;
+  width: 100%;
+}
+
+.links line {
+  stroke: rgba(72, 213, 151, 0.68);
+  stroke-linecap: round;
+  stroke-width: 4;
+}
+
+.node {
+  align-items: start;
+  background: rgba(4, 16, 24, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-left: 5px solid var(--accent);
+  box-shadow: 0 15px 28px rgba(0, 0, 0, 0.32);
+  color: #f4fbff;
+  display: grid;
+  gap: 0.2rem;
+  min-height: 80px;
+  padding: 0.8rem;
+  position: absolute;
+  text-align: left;
+  width: 112px;
+}
+
+.node span {
+  background: color-mix(in srgb, var(--accent), transparent 82%);
+  border: 1px solid color-mix(in srgb, var(--accent), transparent 48%);
+  border-radius: 999px;
+  color: var(--accent);
+  display: inline-grid;
+  font-size: 0.74rem;
+  font-weight: 900;
+  height: 28px;
+  place-items: center;
+  width: 36px;
+}
+
+.node strong {
+  font-size: 0.86rem;
+  line-height: 1.1;
+}
+
+.node small {
+  color: #91a7b8;
+  font-size: 0.72rem;
+}
+
+.node.selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent), transparent 78%), 0 15px 28px rgba(0, 0, 0, 0.32);
+}
+
+.device-editor {
+  max-height: 782px;
+  overflow: auto;
+}
+
+.interface-list,
+.route-list,
+.table-list,
+.log-stack {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.interface-card,
+.route-card,
+.row-item,
+.log-entry {
+  background: rgba(255, 255, 255, 0.055);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 1rem;
+  padding: 0.8rem;
+}
+
+.interface-card {
+  display: grid;
+  gap: 0.7rem;
+}
+
+.interface-card small {
+  color: #48d597;
+}
+
+.interface-head,
+.row-item {
+  align-items: center;
+  display: flex;
+  gap: 0.7rem;
+  justify-content: space-between;
+}
+
+.row-item span {
+  color: #d8e7f1;
+  overflow-wrap: anywhere;
+}
+
+.row-item b {
+  color: #8299aa;
+  font-weight: 700;
+}
+
+.row-item.single {
+  color: #d8e7f1;
+  display: block;
+}
+
+.status {
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
+  color: #a6b8c7;
+  font-size: 0.72rem;
+  font-weight: 900;
+  padding: 0.3rem 0.55rem;
+  text-transform: uppercase;
+}
+
+.status.live {
+  background: rgba(72, 213, 151, 0.16);
+  color: #72e9b3;
+}
+
+.two-col,
+.bottom-grid {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.bottom-grid {
+  align-items: start;
+  grid-template-columns: 1.3fr 0.8fr 1.4fr;
+}
+
+.link-builder,
+.endpoint-picker,
+.ping-panel {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.endpoint-picker span {
+  color: #9eb5c5;
+  font-size: 0.78rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.route-card {
+  display: grid;
+  gap: 0.55rem;
+  grid-template-columns: 1fr 1fr;
+}
+
+.route-card button,
+.route-card select {
+  grid-column: span 1;
+}
+
+.log-panel {
+  max-height: 520px;
+  overflow: auto;
+}
+
+.log-entry {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.log-entry strong {
+  color: #f4fbff;
+}
+
+.log-entry p {
+  color: #afc1cf;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.log-entry.ok {
+  border-left: 4px solid #48d597;
+}
+
+.log-entry.bad {
+  border-left: 4px solid #ff6576;
+}
+
+@media (max-width: 1180px) {
+  .workspace,
+  .bottom-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .device-editor,
+  .log-panel {
+    max-height: none;
+  }
+}
+
+@media (max-width: 760px) {
+  .app-shell {
+    padding: 0.6rem;
+  }
+
+  .hero {
+    align-items: stretch;
+    border-radius: 1.3rem;
+    flex-direction: column;
+    min-height: auto;
+  }
+
+  .quick-actions {
+    min-width: 0;
+  }
+
+  .board {
+    height: 480px;
+  }
+
+  .two-col,
+  .route-card {
+    grid-template-columns: 1fr;
+  }
+
+  .card-heading,
+  .section-title,
+  .row-item {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
