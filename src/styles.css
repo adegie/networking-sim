@@ -286,6 +286,28 @@ h3 {
   position: relative;
 }
 
+.aws-toolbar {
+  align-items: center;
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.aws-toolbar select {
+  min-width: 120px;
+  width: auto;
+}
+
+.aws-board-content {
+  height: 100%;
+  left: 0;
+  position: absolute;
+  top: 0;
+  transform-origin: 0 0;
+  width: 100%;
+}
+
 .aws-lines {
   height: 100%;
   inset: 0;
@@ -381,6 +403,10 @@ h3 {
 
 .aws-node.alb {
   border-left-color: #f97316;
+}
+
+.aws-node.elb {
+  border-left-color: #ec4899;
 }
 
 .aws-node.ec2 {
@@ -843,6 +869,11 @@ h3 {
   .top-bar {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .aws-toolbar,
+  .zoom-controls {
+    justify-content: flex-start;
   }
 
   .title-stack {

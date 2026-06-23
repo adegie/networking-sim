@@ -40,6 +40,7 @@ const AWS_INITIAL = {
   ],
   loadBalancers: [
     { id: 'alb-public', name: 'Public ALB', type: 'alb', scheme: 'internet-facing', subnetIds: ['subnet-public'], privateIp: '10.20.1.10', dnsName: 'app.example.aws', securityGroupIds: ['sg-alb'], targetIds: ['ec2-app'], x: 210, y: 135 },
+    { id: 'elb-classic', name: 'Classic ELB', type: 'elb', scheme: 'internet-facing', subnetIds: ['subnet-public'], privateIp: '10.20.1.12', dnsName: 'classic.example.aws', securityGroupIds: ['sg-alb'], targetIds: ['ec2-app'], x: 70, y: 320 },
   ],
 };
 
@@ -380,6 +381,10 @@ function awsResourceId(resource) {
   return resource?.id || '';
 }
 
+function isAwsLoadBalancer(resource) {
+  return resource?.type === 'alb' || resource?.type === 'elb' || resource?.type === 'nlb';
+}
+
 function findAwsResource(aws, id) {
   if (id === 'internet') return { id: 'internet', type: 'internet', name: 'Internet', x: 25, y: 40 };
   return (
@@ -483,7 +488,7 @@ function simulateAwsTraffic(aws, sourceId, targetId, protocol) {
 
   if (source.id === 'internet') {
     markResource(['internet']);
-    if (target.type === 'alb') {
+    if (isAwsLoadBalancer(target)) {
       markResource([target.id, 'igw-main']);
       markSubnet(target.subnetIds || []);
       if (target.scheme !== 'internet-facing') return fail(`${target.name} is internal and cannot receive Internet traffic.`, [target.id]);
@@ -493,8 +498,8 @@ function simulateAwsTraffic(aws, sourceId, targetId, protocol) {
       if (!targetInstance) return fail(`${target.name} has no registered targets.`, [target.id]);
       markResource([targetInstance.id]);
       markSubnet([targetInstance.subnetId]);
-      if (!checkTargetSecurity(targetInstance, { name: target.name, ip: target.privateIp, securityGroupIds: target.securityGroupIds }, 'ALB target')) return fail(`${targetInstance.name} security group rejected traffic from ${target.name}.`, [targetInstance.id]);
-      trace.push(`${target.name} forwards to target ${targetInstance.name}; response returns through the ALB and Internet Gateway.`);
+      if (!checkTargetSecurity(targetInstance, { name: target.name, ip: target.privateIp, securityGroupIds: target.securityGroupIds }, 'load balancer target')) return fail(`${targetInstance.name} security group rejected traffic from ${target.name}.`, [targetInstance.id]);
+      trace.push(`${target.name} forwards to target ${targetInstance.name}; response returns through the load balancer and Internet Gateway.`);
       return { ok: true, trace, visual };
     }
 
@@ -538,13 +543,13 @@ function simulateAwsTraffic(aws, sourceId, targetId, protocol) {
     return fail(`Unsupported route target ${route.target}.`, [source.id]);
   }
 
-  if (target.type === 'alb') {
+  if (isAwsLoadBalancer(target)) {
     markResource([target.id]);
     markSubnet(target.subnetIds || []);
     if (!checkTargetSecurity(target, { name: source.name, ip: sourceIp, securityGroupIds: source.securityGroupIds || [] }, 'client')) return fail(`${target.name} security group rejected ${source.name}.`, [target.id]);
     const targetInstance = aws.instances.find((item) => target.targetIds.includes(item.id));
     if (!targetInstance) return fail(`${target.name} has no registered targets.`, [target.id]);
-    if (!checkTargetSecurity(targetInstance, { name: target.name, ip: target.privateIp, securityGroupIds: target.securityGroupIds }, 'ALB target')) return fail(`${targetInstance.name} security group rejected ${target.name}.`, [targetInstance.id]);
+    if (!checkTargetSecurity(targetInstance, { name: target.name, ip: target.privateIp, securityGroupIds: target.securityGroupIds }, 'load balancer target')) return fail(`${targetInstance.name} security group rejected ${target.name}.`, [targetInstance.id]);
     markResource([targetInstance.id]);
     markSubnet([targetInstance.subnetId]);
     trace.push(`${target.name} accepts the request and forwards it to ${targetInstance.name}.`);
@@ -1398,10 +1403,12 @@ function AwsLab({ aws, setAws }) {
   const [traffic, setTraffic] = useState({ source: 'internet', target: 'alb-public', protocol: 'HTTP' });
   const [trace, setTrace] = useState([{ id: 'aws-welcome', ok: true, title: 'AWS Lab ready', lines: ['Try Internet -> Public ALB over HTTP, App EC2 -> Internet over HTTP, or App EC2 -> Database EC2 over MYSQL.'] }]);
   const [visual, setVisual] = useState({ resources: {}, subnets: {}, vpcs: {}, routes: {} });
+  const [awsZoom, setAwsZoom] = useState(0.9);
+  const [newAwsType, setNewAwsType] = useState('ec2');
 
   const resources = [
     { id: 'internet', name: 'Internet', type: 'internet' },
-    ...aws.loadBalancers.map((item) => ({ ...item, type: 'alb' })),
+    ...aws.loadBalancers,
     ...aws.instances.map((item) => ({ ...item, type: 'ec2' })),
   ];
   const selected = findAwsResource(aws, selectedId);
@@ -1424,6 +1431,69 @@ function AwsLab({ aws, setAws }) {
     }));
   };
 
+  const changeAwsZoom = (delta) => {
+    setAwsZoom((current) => Math.max(0.5, Math.min(1.75, Number((current + delta).toFixed(2)))));
+  };
+
+  const addAwsResource = () => {
+    const suffix = Date.now().toString(36);
+    const publicSubnet = aws.subnets.find((item) => item.id === 'subnet-public') || aws.subnets[0];
+    const privateSubnet = aws.subnets.find((item) => item.id === 'subnet-private') || aws.subnets[0];
+    const dataSubnet = aws.subnets.find((item) => item.id === 'subnet-data') || privateSubnet;
+    const nextCount = aws.instances.length + aws.loadBalancers.length + aws.gateways.length + 1;
+
+    if (newAwsType === 'ec2') {
+      const subnet = privateSubnet;
+      const resource = {
+        id: `ec2-${suffix}`,
+        name: `EC2 ${nextCount}`,
+        subnetId: subnet.id,
+        privateIp: `10.20.2.${30 + aws.instances.length}`,
+        publicIp: '',
+        securityGroupIds: ['sg-app'],
+        x: subnet.x + 40 + (aws.instances.length % 3) * 54,
+        y: subnet.y + 80 + (aws.instances.length % 3) * 42,
+      };
+      setAws((current) => ({ ...current, instances: [...current.instances, resource] }));
+      setSelectedId(resource.id);
+      return;
+    }
+
+    if (newAwsType === 'alb' || newAwsType === 'elb') {
+      const subnet = publicSubnet;
+      const resource = {
+        id: `${newAwsType}-${suffix}`,
+        name: newAwsType === 'alb' ? `Application LB ${nextCount}` : `Classic ELB ${nextCount}`,
+        type: newAwsType,
+        scheme: 'internet-facing',
+        subnetIds: [subnet.id],
+        privateIp: `10.20.1.${40 + aws.loadBalancers.length}`,
+        dnsName: `${newAwsType}-${suffix}.example.aws`,
+        securityGroupIds: ['sg-alb'],
+        targetIds: aws.instances.filter((item) => item.subnetId === privateSubnet.id).slice(0, 1).map((item) => item.id),
+        x: subnet.x + 45 + (aws.loadBalancers.length % 2) * 70,
+        y: subnet.y + 40 + (aws.loadBalancers.length % 2) * 80,
+      };
+      setAws((current) => ({ ...current, loadBalancers: [...current.loadBalancers, resource] }));
+      setSelectedId(resource.id);
+      return;
+    }
+
+    if (newAwsType === 'nat') {
+      const subnet = publicSubnet;
+      const resource = { id: `nat-${suffix}`, type: 'nat', name: `NAT Gateway ${nextCount}`, subnetId: subnet.id, privateIp: `10.20.1.${60 + aws.gateways.length}`, publicIp: `54.12.0.${60 + aws.gateways.length}`, x: subnet.x + 90, y: subnet.y + 180 };
+      setAws((current) => ({ ...current, gateways: [...current.gateways, resource] }));
+      setSelectedId(resource.id);
+      return;
+    }
+
+    if (newAwsType === 'subnet') {
+      const resource = { id: `subnet-${suffix}`, vpcId: 'vpc-main', name: `Extra subnet ${aws.subnets.length + 1}`, cidr: `10.20.${4 + aws.subnets.length}.0/24`, az: 'eu-west-1a', routeTableId: dataSubnet.routeTableId, naclId: 'nacl-default', x: 140 + aws.subnets.length * 28, y: 445, width: 230, height: 115 };
+      setAws((current) => ({ ...current, subnets: [...current.subnets, resource] }));
+      setSelectedId(resource.id);
+    }
+  };
+
   const runAwsTraffic = () => {
     const result = simulateAwsTraffic(aws, traffic.source, traffic.target, traffic.protocol);
     const source = findAwsResource(aws, traffic.source)?.name || 'Unknown';
@@ -1442,7 +1512,9 @@ function AwsLab({ aws, setAws }) {
   const awsLines = [
     ['internet', 'igw-main'],
     ['igw-main', 'alb-public'],
+    ['igw-main', 'elb-classic'],
     ['alb-public', 'ec2-app'],
+    ['elb-classic', 'ec2-app'],
     ['ec2-app', 'ec2-db'],
     ['ec2-app', 'nat-public'],
     ['nat-public', 'igw-main'],
@@ -1457,44 +1529,62 @@ function AwsLab({ aws, setAws }) {
               <h2>AWS VPC Topology</h2>
               <span>{aws.vpcs.length} VPC / {aws.subnets.length} subnets / {aws.instances.length} EC2</span>
             </div>
-            <button className="ghost" onClick={resetAws}>Reset AWS</button>
+            <div className="aws-toolbar">
+              <select value={newAwsType} onChange={(event) => setNewAwsType(event.target.value)}>
+                <option value="ec2">EC2</option>
+                <option value="alb">ALB</option>
+                <option value="elb">ELB</option>
+                <option value="nat">NAT Gateway</option>
+                <option value="subnet">Subnet</option>
+              </select>
+              <button onClick={addAwsResource}>Add AWS</button>
+              <div className="zoom-controls" aria-label="AWS topology zoom controls">
+                <button className="ghost" onClick={() => changeAwsZoom(-0.1)} aria-label="Zoom out">-</button>
+                <span>{Math.round(awsZoom * 100)}%</span>
+                <button className="ghost" onClick={() => changeAwsZoom(0.1)} aria-label="Zoom in">+</button>
+                <button className="ghost" onClick={() => setAwsZoom(1)}>Reset</button>
+              </div>
+              <button className="ghost" onClick={resetAws}>Reset AWS</button>
+            </div>
           </div>
           <div className="aws-board">
-            <svg className="aws-lines" aria-hidden="true">
-              {awsLines.map(([fromId, toId]) => {
-                const from = findAwsResource(aws, fromId);
-                const to = findAwsResource(aws, toId);
-                if (!from || !to) return null;
-                const active = visual.resources[fromId] && visual.resources[toId] ? visual.resources[toId] : '';
-                return <line key={`${fromId}-${toId}`} className={active} x1={(from.x || 0) + 42} y1={(from.y || 0) + 28} x2={(to.x || 0) + 42} y2={(to.y || 0) + 28} />;
-              })}
-            </svg>
-            <button className={`aws-node internet ${visual.resources.internet || ''}`} style={{ left: 25, top: 40 }} onClick={() => setSelectedId('internet')}>Internet</button>
-            {aws.vpcs.map((vpc) => (
-              <button key={vpc.id} className={`aws-vpc ${visual.vpcs[vpc.id] || ''} ${selectedId === vpc.id ? 'selected' : ''}`} style={{ left: vpc.x, top: vpc.y, width: vpc.width, height: vpc.height }} onClick={() => setSelectedId(vpc.id)}>
-                <strong>{vpc.name}</strong><span>{vpc.cidr}</span>
-              </button>
-            ))}
-            {aws.subnets.map((subnet) => (
-              <button key={subnet.id} className={`aws-subnet ${visual.subnets[subnet.id] || ''} ${selectedId === subnet.id ? 'selected' : ''}`} style={{ left: subnet.x, top: subnet.y, width: subnet.width, height: subnet.height }} onClick={() => setSelectedId(subnet.id)}>
-                <strong>{subnet.name}</strong><span>{subnet.cidr} / {subnet.az}</span>
-              </button>
-            ))}
-            {aws.gateways.map((gateway) => (
-              <button key={gateway.id} className={`aws-node gateway ${visual.resources[gateway.id] || ''} ${selectedId === gateway.id ? 'selected' : ''}`} style={{ left: gateway.x, top: gateway.y }} onClick={() => setSelectedId(gateway.id)}>
-                <span>{gateway.type.toUpperCase()}</span><strong>{gateway.name}</strong>
-              </button>
-            ))}
-            {aws.loadBalancers.map((lb) => (
-              <button key={lb.id} className={`aws-node alb ${visual.resources[lb.id] || ''} ${selectedId === lb.id ? 'selected' : ''}`} style={{ left: lb.x, top: lb.y }} onClick={() => setSelectedId(lb.id)}>
-                <span>ALB</span><strong>{lb.name}</strong><small>{lb.dnsName}</small>
-              </button>
-            ))}
-            {aws.instances.map((instance) => (
-              <button key={instance.id} className={`aws-node ec2 ${visual.resources[instance.id] || ''} ${selectedId === instance.id ? 'selected' : ''}`} style={{ left: instance.x, top: instance.y }} onClick={() => setSelectedId(instance.id)}>
-                <span>EC2</span><strong>{instance.name}</strong><small>{instance.privateIp}</small>
-              </button>
-            ))}
+            <div className="aws-board-content" style={{ transform: `scale(${awsZoom})` }}>
+              <svg className="aws-lines" aria-hidden="true">
+                {awsLines.map(([fromId, toId]) => {
+                  const from = findAwsResource(aws, fromId);
+                  const to = findAwsResource(aws, toId);
+                  if (!from || !to) return null;
+                  const active = visual.resources[fromId] && visual.resources[toId] ? visual.resources[toId] : '';
+                  return <line key={`${fromId}-${toId}`} className={active} x1={(from.x || 0) + 42} y1={(from.y || 0) + 28} x2={(to.x || 0) + 42} y2={(to.y || 0) + 28} />;
+                })}
+              </svg>
+              <button className={`aws-node internet ${visual.resources.internet || ''}`} style={{ left: 25, top: 40 }} onClick={() => setSelectedId('internet')}>Internet</button>
+              {aws.vpcs.map((vpc) => (
+                <button key={vpc.id} className={`aws-vpc ${visual.vpcs[vpc.id] || ''} ${selectedId === vpc.id ? 'selected' : ''}`} style={{ left: vpc.x, top: vpc.y, width: vpc.width, height: vpc.height }} onClick={() => setSelectedId(vpc.id)}>
+                  <strong>{vpc.name}</strong><span>{vpc.cidr}</span>
+                </button>
+              ))}
+              {aws.subnets.map((subnet) => (
+                <button key={subnet.id} className={`aws-subnet ${visual.subnets[subnet.id] || ''} ${selectedId === subnet.id ? 'selected' : ''}`} style={{ left: subnet.x, top: subnet.y, width: subnet.width, height: subnet.height }} onClick={() => setSelectedId(subnet.id)}>
+                  <strong>{subnet.name}</strong><span>{subnet.cidr} / {subnet.az}</span>
+                </button>
+              ))}
+              {aws.gateways.map((gateway) => (
+                <button key={gateway.id} className={`aws-node gateway ${visual.resources[gateway.id] || ''} ${selectedId === gateway.id ? 'selected' : ''}`} style={{ left: gateway.x, top: gateway.y }} onClick={() => setSelectedId(gateway.id)}>
+                  <span>{gateway.type.toUpperCase()}</span><strong>{gateway.name}</strong>
+                </button>
+              ))}
+              {aws.loadBalancers.map((lb) => (
+                <button key={lb.id} className={`aws-node ${lb.type || 'alb'} ${visual.resources[lb.id] || ''} ${selectedId === lb.id ? 'selected' : ''}`} style={{ left: lb.x, top: lb.y }} onClick={() => setSelectedId(lb.id)}>
+                  <span>{(lb.type || 'alb').toUpperCase()}</span><strong>{lb.name}</strong><small>{lb.dnsName}</small>
+                </button>
+              ))}
+              {aws.instances.map((instance) => (
+                <button key={instance.id} className={`aws-node ec2 ${visual.resources[instance.id] || ''} ${selectedId === instance.id ? 'selected' : ''}`} style={{ left: instance.x, top: instance.y }} onClick={() => setSelectedId(instance.id)}>
+                  <span>EC2</span><strong>{instance.name}</strong><small>{instance.privateIp}</small>
+                </button>
+              ))}
+            </div>
           </div>
         </div>
 
@@ -1567,7 +1657,7 @@ function AwsLab({ aws, setAws }) {
 
 function AwsResourceEditor({ aws, selected, onUpdate }) {
   if (!selected) return <p className="muted">Select an AWS object.</p>;
-  const collection = selected.type === 'alb' ? 'loadBalancers' : selected.type === 'igw' || selected.type === 'nat' ? 'gateways' : selected.privateIp !== undefined ? 'instances' : selected.cidr && selected.routeTableId ? 'subnets' : selected.cidr ? 'vpcs' : null;
+  const collection = isAwsLoadBalancer(selected) ? 'loadBalancers' : selected.type === 'igw' || selected.type === 'nat' ? 'gateways' : selected.privateIp !== undefined ? 'instances' : selected.cidr && selected.routeTableId ? 'subnets' : selected.cidr ? 'vpcs' : null;
   const securityGroups = selected.securityGroupIds?.map((id) => aws.securityGroups.find((group) => group.id === id)).filter(Boolean) || [];
   const subnet = awsSubnetOf(aws, selected);
   const routeTable = selected.routeTableId ? aws.routeTables.find((table) => table.id === selected.routeTableId) : subnet ? awsRouteTableForSubnet(aws, subnet.id) : null;
@@ -1576,7 +1666,7 @@ function AwsResourceEditor({ aws, selected, onUpdate }) {
     return (
       <>
         <h2>Internet</h2>
-        <p className="muted">External clients can reach public IPs, internet-facing ALBs, and resources routed through an Internet Gateway.</p>
+        <p className="muted">External clients can reach public IPs, internet-facing ELB/ALB resources, and resources routed through an Internet Gateway.</p>
       </>
     );
   }
