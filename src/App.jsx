@@ -491,15 +491,9 @@ function App() {
 
   return (
     <main className="app-shell">
-      <header className="hero">
-        <div>
-          <p className="eyebrow">Ethernet Lab</p>
-          <h1>Build packets, cables, ARP tables, and routes.</h1>
-          <p className="hero-copy">
-            A browser playground for experimenting with hosts, switches, routers, IPv4 subnets, ARP resolution, and ICMP ping flow.
-          </p>
-        </div>
-        <div className="quick-actions">
+      <header className="top-bar">
+        <h1>Ethernet Network Playground</h1>
+        <div className="quick-actions" aria-label="Add device">
           <select value={newType} onChange={(event) => setNewType(event.target.value)}>
             {Object.entries(DEVICE_TYPES).map(([key, value]) => (
               <option key={key} value={key}>{value.label}</option>
