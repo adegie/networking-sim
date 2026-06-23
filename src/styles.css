@@ -825,6 +825,17 @@ h3 {
   grid-template-columns: 1fr 0.8fr 1fr 0.9fr auto;
 }
 
+.static-nat-card {
+  align-items: end;
+  background: #f8fafc;
+  border: 1px solid #d7dee7;
+  border-radius: 0.55rem;
+  display: grid;
+  gap: 0.45rem;
+  grid-template-columns: 1fr 1fr 0.75fr auto auto;
+  padding: 0.45rem;
+}
+
 .route-card button,
 .route-card select {
   grid-column: span 1;
@@ -905,6 +916,7 @@ h3 {
   .interface-fields,
   .aws-route-row,
   .two-field-grid,
+  .static-nat-card,
   .route-card {
     grid-template-columns: 1fr;
   }

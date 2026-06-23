@@ -103,6 +103,7 @@ const INITIAL_DEVICES = [
     arp: {},
     routes: [],
     natTranslations: [],
+    staticNatRules: [],
   },
   {
     id: 'pc-b',
@@ -655,23 +656,63 @@ function simulatePing(devices, links, sourceDeviceId, destinationIp) {
   }
 
   const updates = [];
-  const visitedRouters = new Set();
+  const pendingNatTranslations = [];
+  const icmpId = Math.floor(1000 + Math.random() * 64000);
 
-  const applyNatIfNeeded = (router, incomingInterfaceId, outgoingNic, packet) => {
+  const applySourceNat = (router, incomingInterfaceId, outgoingNic, packet) => {
     const incomingNic = router.interfaces.find((nic) => nic.id === incomingInterfaceId);
     if (incomingNic?.natRole !== 'inside' || outgoingNic?.natRole !== 'outside' || !outgoingNic.ip) return packet;
+    const staticRule = (router.staticNatRules || []).find((rule) => rule.enabled !== false && rule.protocol === 'ICMP' && rule.insideIp === packet.sourceIp);
+    if (staticRule) {
+      trace.push(`${router.name} applies static source NAT: ${packet.sourceIp} -> ${staticRule.outsideIp}.`);
+      return { ...packet, sourceIp: staticRule.outsideIp, staticNat: staticRule };
+    }
     if (packet.sourceIp === outgoingNic.ip) return packet;
 
     const translation = {
-      id: natTranslationId(packet.sourceIp, outgoingNic.ip, packet.destinationIp),
+      id: natTranslationId(packet.sourceIp, outgoingNic.ip, `${packet.destinationIp}:${packet.icmpId}`),
+      type: 'dynamic',
       insideIp: packet.sourceIp,
       outsideIp: outgoingNic.ip,
       destinationIp: packet.destinationIp,
       protocol: 'ICMP',
+      icmpId: packet.icmpId,
+      insideInterfaceId: incomingInterfaceId,
+      outsideInterfaceId: outgoingNic.id,
     };
-    trace.push(`${router.name} applies source NAT: ${packet.sourceIp} -> ${outgoingNic.ip} (${incomingNic.name} inside to ${outgoingNic.name} outside).`);
+    trace.push(`${router.name} applies dynamic PAT: ${packet.sourceIp} icmp-id ${packet.icmpId} -> ${outgoingNic.ip} icmp-id ${packet.icmpId}.`);
     updates.push({ kind: 'nat', deviceId: router.id, translation });
+    pendingNatTranslations.push({ deviceId: router.id, translation });
     return { ...packet, sourceIp: outgoingNic.ip, nat: { routerName: router.name, ...translation } };
+  };
+
+  const applyDestinationNat = (router, incomingInterfaceId, packet) => {
+    const incomingNic = router.interfaces.find((nic) => nic.id === incomingInterfaceId);
+    if (incomingNic?.natRole !== 'outside') return packet;
+
+    const allDynamicTranslations = [
+      ...(router.natTranslations || []),
+      ...pendingNatTranslations.filter((item) => item.deviceId === router.id).map((item) => item.translation),
+    ];
+    const dynamic = allDynamicTranslations.find((translation) =>
+      translation.type === 'dynamic' &&
+      translation.protocol === 'ICMP' &&
+      translation.outsideIp === packet.destinationIp &&
+      translation.destinationIp === packet.sourceIp &&
+      String(translation.icmpId) === String(packet.icmpId),
+    );
+    if (dynamic) {
+      trace.push(`${router.name} matches dynamic NAT reply: ${packet.destinationIp} icmp-id ${packet.icmpId} -> ${dynamic.insideIp}.`);
+      return { ...packet, destinationIp: dynamic.insideIp, dnatApplied: true, nat: { routerName: router.name, ...dynamic } };
+    }
+
+    const staticRule = (router.staticNatRules || []).find((rule) => rule.enabled !== false && rule.protocol === 'ICMP' && rule.outsideIp === packet.destinationIp);
+    if (staticRule) {
+      trace.push(`${router.name} applies static NAT: ${packet.destinationIp} -> ${staticRule.insideIp}.`);
+      return { ...packet, destinationIp: staticRule.insideIp, dnatApplied: true, staticNat: staticRule };
+    }
+
+    return packet;
   };
 
   const arpResolve = (device, nic, targetIp) => {
@@ -682,19 +723,33 @@ function simulatePing(devices, links, sourceDeviceId, destinationIp) {
     } else {
       trace.push(`${device.name} broadcasts ARP on ${nic.name}: who has ${targetIp}?`);
     }
-    const target = findIpPathOnSegment(devices, links, endpoint, targetIp);
+    let target = findIpPathOnSegment(devices, links, endpoint, targetIp);
+    if (!target) {
+      const proxy = l2ReachableInterfaces(devices, links, endpoint).find(({ device: reachableDevice, nic: reachableNic }) =>
+        reachableDevice.type === 'router' &&
+        reachableNic.natRole === 'outside' &&
+        (reachableDevice.staticNatRules || []).some((rule) => rule.enabled !== false && rule.protocol === 'ICMP' && rule.outsideIp === targetIp),
+      );
+      if (proxy) {
+        target = { ...proxy, linkIds: [], deviceIds: [device.id, proxy.device.id] };
+        trace.push(`${proxy.device.name} proxy-ARPs for static NAT address ${targetIp} with MAC ${proxy.nic.mac}.`);
+      }
+    }
     if (!target) {
       trace.push(`No interface with ${targetIp} answered on that Ethernet segment.`);
       markError([device.id]);
       return null;
     }
-    trace.push(`${target.device.name} replies with MAC ${target.nic.mac}.`);
+    if (target.nic.ip === targetIp) trace.push(`${target.device.name} replies with MAC ${target.nic.mac}.`);
     updates.push({ deviceId: device.id, ip: targetIp, mac: target.nic.mac });
     markOk(target.deviceIds, target.linkIds);
     return target;
   };
 
-  const deliverFromRouter = (router, destination, incomingInterfaceId, packet) => {
+  const deliverFromRouter = (router, incomingInterfaceId, packet, visitedRouters = new Set()) => {
+    const packetAfterDnat = applyDestinationNat(router, incomingInterfaceId, packet);
+    const destination = packetAfterDnat.destinationIp;
+    const incomingNic = router.interfaces.find((nic) => nic.id === incomingInterfaceId);
     if (visitedRouters.has(router.id)) {
       trace.push(`Routing loop detected at ${router.name}.`);
       markError([router.id]);
@@ -706,16 +761,18 @@ function simulatePing(devices, links, sourceDeviceId, destinationIp) {
     const directNic = router.interfaces.find((nic) => nic.ip && nic.mask && sameSubnet(nic.ip, nic.mask, destination));
     if (directNic) {
       trace.push(`${router.name} has connected route ${networkOf(directNic.ip, directNic.mask)}/${maskBits(directNic.mask)} via ${directNic.name}.`);
-      const forwardedPacket = applyNatIfNeeded(router, incomingInterfaceId, directNic, packet);
+      if (incomingNic?.natRole === 'outside' && directNic.natRole === 'inside' && !packetAfterDnat.dnatApplied) {
+        trace.push(`${router.name} blocks unsolicited outside-to-inside traffic; no dynamic or static NAT entry matches ${packet.destinationIp}.`);
+        markError([router.id]);
+        return false;
+      }
+      const forwardedPacket = applySourceNat(router, incomingInterfaceId, directNic, packetAfterDnat);
       const finalTarget = arpResolve(router, directNic, destination);
       if (!finalTarget) return false;
-      trace.push(`ICMP echo reaches ${finalTarget.device.name} from ${forwardedPacket.sourceIp}; echo reply follows the reverse path.`);
-      if (forwardedPacket.nat) {
-        trace.push(`${forwardedPacket.nat.routerName} maps the reply for ${forwardedPacket.nat.outsideIp} back to ${forwardedPacket.nat.insideIp}.`);
-      }
+      trace.push(`ICMP ${forwardedPacket.reply ? 'reply' : 'echo'} reaches ${finalTarget.device.name} from ${forwardedPacket.sourceIp}.`);
       updates.push({ deviceId: finalTarget.device.id, ip: directNic.ip, mac: directNic.mac });
       markOk([finalTarget.device.id]);
-      return true;
+      return { ok: true, finalTarget, finalNic: directNic, packet: forwardedPacket };
     }
 
     const route = [...router.routes].filter((item) => routeMatches(item, destination)).sort((a, b) => maskBits(b.mask) - maskBits(a.mask))[0];
@@ -731,7 +788,12 @@ function simulatePing(devices, links, sourceDeviceId, destinationIp) {
       return false;
     }
     trace.push(`${router.name} forwards by static route ${route.network}/${route.mask} toward ${route.nextHop}.`);
-    const forwardedPacket = applyNatIfNeeded(router, incomingInterfaceId, outgoingNic, packet);
+    if (incomingNic?.natRole === 'outside' && outgoingNic.natRole === 'inside' && !packetAfterDnat.dnatApplied) {
+      trace.push(`${router.name} blocks unsolicited outside-to-inside traffic; no dynamic or static NAT entry matches ${packet.destinationIp}.`);
+      markError([router.id]);
+      return false;
+    }
+    const forwardedPacket = applySourceNat(router, incomingInterfaceId, outgoingNic, packetAfterDnat);
     const nextHop = arpResolve(router, outgoingNic, route.nextHop);
     if (!nextHop) return false;
     if (nextHop.device.type !== 'router') {
@@ -739,7 +801,41 @@ function simulatePing(devices, links, sourceDeviceId, destinationIp) {
       markError([nextHop.device.id]);
       return false;
     }
-    return deliverFromRouter(nextHop.device, destination, nextHop.nic.id, forwardedPacket);
+    return deliverFromRouter(nextHop.device, nextHop.nic.id, forwardedPacket, visitedRouters);
+  };
+
+  const sendReply = (echoTarget, echoTargetNic, receivedPacket) => {
+    const replyDestination = receivedPacket.sourceIp;
+    trace.push(`${echoTarget.device.name} sends ICMP reply from ${echoTarget.nic.ip} to ${replyDestination}.`);
+    if (sameSubnet(echoTarget.nic.ip, echoTarget.nic.mask, replyDestination)) {
+      const directReplyTarget = arpResolve(echoTarget.device, echoTarget.nic, replyDestination);
+      if (!directReplyTarget) return false;
+      trace.push(`ICMP reply reaches ${directReplyTarget.device.name} on the same Ethernet segment.`);
+      updates.push({ deviceId: directReplyTarget.device.id, ip: echoTarget.nic.ip, mac: echoTarget.nic.mac });
+      markOk([directReplyTarget.device.id]);
+      return true;
+    }
+
+    const gatewayIp = echoTarget.device.gateway;
+    if (!gatewayIp) {
+      trace.push(`${echoTarget.device.name} needs a default gateway to reply to ${replyDestination}.`);
+      markError([echoTarget.device.id]);
+      return false;
+    }
+    const gateway = arpResolve(echoTarget.device, echoTarget.nic, gatewayIp);
+    if (!gateway) return false;
+    if (gateway.device.type !== 'router') {
+      trace.push(`${gateway.device.name} is not a router for the ICMP reply.`);
+      markError([gateway.device.id]);
+      return false;
+    }
+    const replyResult = deliverFromRouter(gateway.device, gateway.nic.id, {
+      sourceIp: echoTarget.nic.ip,
+      destinationIp: replyDestination,
+      icmpId: receivedPacket.icmpId,
+      reply: true,
+    }, new Set());
+    return Boolean(replyResult?.ok);
   };
 
   const nextHopIp = sameSubnet(sourceNic.ip, sourceNic.mask, destinationIp) ? destinationIp : source.gateway;
@@ -770,7 +866,9 @@ function simulatePing(devices, links, sourceDeviceId, destinationIp) {
     return { ok: false, trace, updates, visual };
   }
 
-  const ok = deliverFromRouter(firstHop.device, destinationIp, firstHop.nic.id, { sourceIp: sourceNic.ip, destinationIp });
+  const forwardResult = deliverFromRouter(firstHop.device, firstHop.nic.id, { sourceIp: sourceNic.ip, destinationIp, icmpId, reply: false });
+  if (!forwardResult?.ok) return { ok: false, trace, updates, visual };
+  const ok = sendReply(forwardResult.finalTarget, forwardResult.finalNic, forwardResult.packet);
   return { ok, trace, updates, visual };
 }
 
@@ -831,6 +929,7 @@ function validateTopologyPayload(payload) {
       arp: device.arp || {},
       routes: Array.isArray(device.routes) ? device.routes : [],
       natTranslations: Array.isArray(device.natTranslations) ? device.natTranslations : [],
+      staticNatRules: Array.isArray(device.staticNatRules) ? device.staticNatRules : [],
     })),
     links: topology.links,
     awsTopology: topology.awsTopology,
@@ -919,6 +1018,7 @@ function App() {
       arp: {},
       routes: [],
       natTranslations: [],
+      staticNatRules: [],
     };
     setDevices((items) => [...items, created]);
     setSelectedId(id);
@@ -947,6 +1047,7 @@ function App() {
       })),
       arp: { ...source.arp },
       natTranslations: [],
+      staticNatRules: (source.staticNatRules || []).map((rule) => ({ ...rule, id: `${rule.id}-${Date.now().toString(36)}` })),
       routes: source.routes.map((route) => ({
         ...route,
         id: `${route.id}-${Date.now().toString(36)}`,
@@ -1002,6 +1103,34 @@ function App() {
 
   const clearNatTranslations = (deviceId) => {
     setDevices((items) => items.map((device) => (device.id === deviceId ? { ...device, natTranslations: [] } : device)));
+  };
+
+  const addStaticNatRule = (deviceId) => {
+    setDevices((items) =>
+      items.map((device) =>
+        device.id === deviceId
+          ? { ...device, staticNatRules: [...(device.staticNatRules || []), { id: `static-nat-${Date.now()}`, protocol: 'ICMP', outsideIp: '', insideIp: '', enabled: true }] }
+          : device,
+      ),
+    );
+  };
+
+  const updateStaticNatRule = (deviceId, ruleId, patch) => {
+    setDevices((items) =>
+      items.map((device) =>
+        device.id === deviceId
+          ? { ...device, staticNatRules: (device.staticNatRules || []).map((rule) => (rule.id === ruleId ? { ...rule, ...patch } : rule)) }
+          : device,
+      ),
+    );
+  };
+
+  const removeStaticNatRule = (deviceId, ruleId) => {
+    setDevices((items) =>
+      items.map((device) =>
+        device.id === deviceId ? { ...device, staticNatRules: (device.staticNatRules || []).filter((rule) => rule.id !== ruleId) } : device,
+      ),
+    );
   };
 
   const setPingSource = (deviceId) => {
@@ -1342,6 +1471,9 @@ function App() {
               onAddArp={addManualArp}
               onClearArp={clearArp}
               onClearNat={clearNatTranslations}
+              onAddStaticNat={addStaticNatRule}
+              onUpdateStaticNat={updateStaticNatRule}
+              onRemoveStaticNat={removeStaticNatRule}
               onAddRoute={addRoute}
               onUpdateRoute={updateRoute}
               onRemoveRoute={removeRoute}
@@ -1974,7 +2106,7 @@ function TopologyContextMenu({ menu, device, selectedDevice, canPatchCable, canP
   );
 }
 
-function DeviceEditor({ device, links, occupied, onUpdate, onUpdateInterface, onAddInterface, onRemoveDevice, onAddArp, onClearArp, onClearNat, onAddRoute, onUpdateRoute, onRemoveRoute }) {
+function DeviceEditor({ device, links, occupied, onUpdate, onUpdateInterface, onAddInterface, onRemoveDevice, onAddArp, onClearArp, onClearNat, onAddStaticNat, onUpdateStaticNat, onRemoveStaticNat, onAddRoute, onUpdateRoute, onRemoveRoute }) {
   return (
     <div className="panel device-editor">
       <div className="card-heading compact">
@@ -2081,10 +2213,45 @@ function DeviceEditor({ device, links, occupied, onUpdate, onUpdateInterface, on
           <div className="table-list">
             {(device.natTranslations || []).map((translation) => (
               <div key={translation.id} className="row-item single">
-                {translation.protocol} {translation.insideIp} <b>as</b> {translation.outsideIp} <b>to</b> {translation.destinationIp}
+                {translation.type || 'dynamic'} {translation.protocol} {translation.insideIp} <b>as</b> {translation.outsideIp} <b>to</b> {translation.destinationIp}{translation.icmpId ? ` id ${translation.icmpId}` : ''}
               </div>
             ))}
             {!(device.natTranslations || []).length && <p className="muted">No NAT translations yet. Mark one interface inside and another outside, then ping across them.</p>}
+          </div>
+        </section>
+      )}
+
+      {device.type === 'router' && (
+        <section>
+          <div className="section-title">
+            <h3>Static NAT</h3>
+            <button className="ghost" onClick={() => onAddStaticNat(device.id)}>Add rule</button>
+          </div>
+          <div className="route-list">
+            {(device.staticNatRules || []).map((rule) => (
+              <div key={rule.id} className="static-nat-card">
+                <label>
+                  Outside IP
+                  <input value={rule.outsideIp} onChange={(event) => onUpdateStaticNat(device.id, rule.id, { outsideIp: event.target.value })} placeholder="10.0.0.100" />
+                </label>
+                <label>
+                  Inside IP
+                  <input value={rule.insideIp} onChange={(event) => onUpdateStaticNat(device.id, rule.id, { insideIp: event.target.value })} placeholder="192.168.10.10" />
+                </label>
+                <label>
+                  Protocol
+                  <select value={rule.protocol} onChange={(event) => onUpdateStaticNat(device.id, rule.id, { protocol: event.target.value })}>
+                    <option value="ICMP">ICMP</option>
+                  </select>
+                </label>
+                <label className="inline-toggle">
+                  <input type="checkbox" checked={rule.enabled !== false} onChange={(event) => onUpdateStaticNat(device.id, rule.id, { enabled: event.target.checked })} />
+                  Enabled
+                </label>
+                <button className="ghost" onClick={() => onRemoveStaticNat(device.id, rule.id)}>Remove</button>
+              </div>
+            ))}
+            {!(device.staticNatRules || []).length && <p className="muted">Static NAT permits outside-to-inside ICMP to a mapped inside host. Dynamic entries are created automatically for inside-to-outside pings.</p>}
           </div>
         </section>
       )}
