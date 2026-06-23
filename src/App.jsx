@@ -542,7 +542,8 @@ function App() {
   const [log, setLog] = useState([
     { id: 'welcome', ok: true, title: 'Welcome', lines: ['Try pinging 10.0.0.20 from Workstation A, then inspect ARP tables.'] },
   ]);
-  const [topologyZoom, setTopologyZoom] = useState(1);
+  const [showEndpointLabels, setShowEndpointLabels] = useState(false);
+  const [topologyZoom, setTopologyZoom] = useState(0.9);
   const [pingVisual, setPingVisual] = useState({ nodes: {}, links: {} });
   const [dragging, setDragging] = useState(null);
   const [contextMenu, setContextMenu] = useState(null);
@@ -929,6 +930,10 @@ function App() {
               <span>{devices.length} devices / {links.length} links</span>
             </div>
             <div className="zoom-controls" aria-label="Topology zoom controls">
+              <label className="inline-toggle">
+                <input type="checkbox" checked={showEndpointLabels} onChange={(event) => setShowEndpointLabels(event.target.checked)} />
+                Labels
+              </label>
               <button className="ghost" onClick={() => changeTopologyZoom(-0.1)} aria-label="Zoom out">-</button>
               <span>{Math.round(topologyZoom * 100)}%</span>
               <button className="ghost" onClick={() => changeTopologyZoom(0.1)} aria-label="Zoom in">+</button>
@@ -945,16 +950,16 @@ function App() {
                   return <line key={item.id} className={pingVisual.links[item.id] || ''} x1={a.x + 56} y1={a.y + 40} x2={b.x + 56} y2={b.y + 40} />;
                 })}
               </svg>
-              {links.flatMap((item) => {
+              {showEndpointLabels && links.flatMap((item) => {
                 const a = getDevice(devices, item.a.deviceId);
                 const b = getDevice(devices, item.b.deviceId);
                 const aNic = getInterface(devices, item.a.deviceId, item.a.interfaceId);
                 const bNic = getInterface(devices, item.b.deviceId, item.b.interfaceId);
                 if (!a || !b || !aNic || !bNic) return [];
                 return [
-                  <EndpointLabel key={`${item.id}-a`} device={a} otherDevice={b} nic={aNic} />,
-                  <EndpointLabel key={`${item.id}-b`} device={b} otherDevice={a} nic={bNic} />,
-                ];
+                  a.type !== 'switch' ? <EndpointLabel key={`${item.id}-a`} device={a} otherDevice={b} nic={aNic} /> : null,
+                  b.type !== 'switch' ? <EndpointLabel key={`${item.id}-b`} device={b} otherDevice={a} nic={bNic} /> : null,
+                ].filter(Boolean);
               })}
               {devices.map((device) => {
                 const type = DEVICE_TYPES[device.type];
@@ -1097,7 +1102,7 @@ function EndpointLabel({ device, otherDevice, nic }) {
   return (
     <div
       className={`endpoint-label ${rightSide ? 'right' : 'left'}`}
-      style={{ left: rightSide ? device.x + 116 : device.x - 142, top: device.y + 34 + verticalOffset }}
+      style={{ left: rightSide ? device.x + 116 : device.x - 6, top: device.y + 34 + verticalOffset }}
     >
       <span className="endpoint-name">{nic.name}</span>
       <FormattedIp ip={nic.ip} mask={nic.mask} />
