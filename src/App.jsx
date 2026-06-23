@@ -208,6 +208,27 @@ function maskBits(mask) {
   return parsed.toString(2).split('1').length - 1;
 }
 
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function scaledBoardMetrics(boardElement, zoom) {
+  const rect = boardElement.getBoundingClientRect();
+  return { rect, width: rect.width / zoom, height: rect.height / zoom };
+}
+
+function boundedBoardPosition(event, boardElement, zoom, offsetX, offsetY, width = 120, height = 90) {
+  const { rect, width: logicalWidth, height: logicalHeight } = scaledBoardMetrics(boardElement, zoom);
+  return {
+    x: clamp((event.clientX - rect.left) / zoom - offsetX, 20, logicalWidth - width),
+    y: clamp((event.clientY - rect.top) / zoom - offsetY, 20, logicalHeight - height),
+  };
+}
+
+function boardDropPoint(event, boardElement, zoom, width = 120, height = 90) {
+  return boundedBoardPosition(event, boardElement, zoom, width / 2, height / 2, width, height);
+}
+
 function endpointKey(endpoint) {
   return `${endpoint.deviceId}:${endpoint.interfaceId}`;
 }
@@ -394,6 +415,37 @@ function findAwsResource(aws, id) {
     aws.subnets.find((item) => item.id === id) ||
     aws.vpcs.find((item) => item.id === id)
   );
+}
+
+function awsCollectionForResource(resource) {
+  if (!resource || resource.id === 'internet') return null;
+  if (isAwsLoadBalancer(resource)) return 'loadBalancers';
+  if (resource.type === 'igw' || resource.type === 'nat') return 'gateways';
+  if (resource.type === 'ec2' || (resource.privateIp !== undefined && resource.securityGroupIds)) return 'instances';
+  if (resource.cidr && resource.routeTableId) return 'subnets';
+  if (resource.cidr) return 'vpcs';
+  return null;
+}
+
+function awsChildResourceIds(aws, resource) {
+  if (!resource) return [];
+  if (resource.cidr && resource.routeTableId) {
+    return [
+      ...aws.instances.filter((item) => item.subnetId === resource.id).map((item) => item.id),
+      ...aws.gateways.filter((item) => item.subnetId === resource.id).map((item) => item.id),
+      ...aws.loadBalancers.filter((item) => item.subnetIds?.includes(resource.id)).map((item) => item.id),
+    ];
+  }
+  if (resource.cidr) {
+    const subnetIds = aws.subnets.filter((item) => item.vpcId === resource.id).map((item) => item.id);
+    return [
+      ...subnetIds,
+      ...aws.instances.filter((item) => subnetIds.includes(item.subnetId)).map((item) => item.id),
+      ...aws.gateways.filter((item) => item.vpcId === resource.id || subnetIds.includes(item.subnetId)).map((item) => item.id),
+      ...aws.loadBalancers.filter((item) => item.subnetIds?.some((id) => subnetIds.includes(id))).map((item) => item.id),
+    ];
+  }
+  return [];
 }
 
 function awsSubnetOf(aws, resource) {
@@ -837,11 +889,7 @@ function App() {
   useEffect(() => {
     const onMove = (event) => {
       if (!dragging || !boardRef.current) return;
-      const rect = boardRef.current.getBoundingClientRect();
-      const logicalWidth = rect.width / topologyZoom;
-      const logicalHeight = rect.height / topologyZoom;
-      const x = Math.max(20, Math.min(logicalWidth - 120, (event.clientX - rect.left) / topologyZoom - dragging.offsetX));
-      const y = Math.max(20, Math.min(logicalHeight - 90, (event.clientY - rect.top) / topologyZoom - dragging.offsetY));
+      const { x, y } = boundedBoardPosition(event, boardRef.current, topologyZoom, dragging.offsetX, dragging.offsetY);
       setDevices((items) => items.map((item) => (item.id === dragging.id ? { ...item, x, y } : item)));
     };
     const onUp = () => setDragging(null);
@@ -1028,13 +1076,7 @@ function App() {
   };
 
   const getBoardPoint = (event) => {
-    const rect = boardRef.current.getBoundingClientRect();
-    const logicalWidth = rect.width / topologyZoom;
-    const logicalHeight = rect.height / topologyZoom;
-    return {
-      x: Math.max(20, Math.min(logicalWidth - 120, (event.clientX - rect.left) / topologyZoom - 56)),
-      y: Math.max(20, Math.min(logicalHeight - 90, (event.clientY - rect.top) / topologyZoom - 40)),
-    };
+    return boardDropPoint(event, boardRef.current, topologyZoom, 112, 80);
   };
 
   const openCanvasMenu = (event) => {
@@ -1405,6 +1447,9 @@ function AwsLab({ aws, setAws }) {
   const [visual, setVisual] = useState({ resources: {}, subnets: {}, vpcs: {}, routes: {} });
   const [awsZoom, setAwsZoom] = useState(0.9);
   const [newAwsType, setNewAwsType] = useState('ec2');
+  const [awsDragging, setAwsDragging] = useState(null);
+  const [awsContextMenu, setAwsContextMenu] = useState(null);
+  const awsBoardRef = useRef(null);
 
   const resources = [
     { id: 'internet', name: 'Internet', type: 'internet' },
@@ -1435,14 +1480,54 @@ function AwsLab({ aws, setAws }) {
     setAwsZoom((current) => Math.max(0.5, Math.min(1.75, Number((current + delta).toFixed(2)))));
   };
 
-  const addAwsResource = () => {
+  useEffect(() => {
+    const closeContextMenu = () => setAwsContextMenu(null);
+    const closeOnEscape = (event) => {
+      if (event.key === 'Escape') setAwsContextMenu(null);
+    };
+    window.addEventListener('click', closeContextMenu);
+    window.addEventListener('keydown', closeOnEscape);
+    return () => {
+      window.removeEventListener('click', closeContextMenu);
+      window.removeEventListener('keydown', closeOnEscape);
+    };
+  }, []);
+
+  useEffect(() => {
+    const onMove = (event) => {
+      if (!awsDragging || !awsBoardRef.current) return;
+      const { x, y } = boundedBoardPosition(event, awsBoardRef.current, awsZoom, awsDragging.offsetX, awsDragging.offsetY, awsDragging.width, awsDragging.height);
+      const dx = x - awsDragging.lastX;
+      const dy = y - awsDragging.lastY;
+      if (!awsDragging.collection) return;
+      const childIds = new Set(awsDragging.childIds || []);
+      setAws((current) => ({
+        ...current,
+        vpcs: current.vpcs.map((item) => (item.id === awsDragging.id ? { ...item, x, y } : childIds.has(item.id) ? { ...item, x: item.x + dx, y: item.y + dy } : item)),
+        subnets: current.subnets.map((item) => (item.id === awsDragging.id ? { ...item, x, y } : childIds.has(item.id) ? { ...item, x: item.x + dx, y: item.y + dy } : item)),
+        gateways: current.gateways.map((item) => (item.id === awsDragging.id ? { ...item, x, y } : childIds.has(item.id) ? { ...item, x: item.x + dx, y: item.y + dy } : item)),
+        loadBalancers: current.loadBalancers.map((item) => (item.id === awsDragging.id ? { ...item, x, y } : childIds.has(item.id) ? { ...item, x: item.x + dx, y: item.y + dy } : item)),
+        instances: current.instances.map((item) => (item.id === awsDragging.id ? { ...item, x, y } : childIds.has(item.id) ? { ...item, x: item.x + dx, y: item.y + dy } : item)),
+      }));
+      setAwsDragging((current) => (current ? { ...current, lastX: x, lastY: y } : current));
+    };
+    const onUp = () => setAwsDragging(null);
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    return () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+    };
+  }, [awsDragging, awsZoom, setAws]);
+
+  const addAwsResource = (typeOverride = newAwsType, position = null) => {
     const suffix = Date.now().toString(36);
     const publicSubnet = aws.subnets.find((item) => item.id === 'subnet-public') || aws.subnets[0];
     const privateSubnet = aws.subnets.find((item) => item.id === 'subnet-private') || aws.subnets[0];
     const dataSubnet = aws.subnets.find((item) => item.id === 'subnet-data') || privateSubnet;
     const nextCount = aws.instances.length + aws.loadBalancers.length + aws.gateways.length + 1;
 
-    if (newAwsType === 'ec2') {
+    if (typeOverride === 'ec2') {
       const subnet = privateSubnet;
       const resource = {
         id: `ec2-${suffix}`,
@@ -1451,46 +1536,50 @@ function AwsLab({ aws, setAws }) {
         privateIp: `10.20.2.${30 + aws.instances.length}`,
         publicIp: '',
         securityGroupIds: ['sg-app'],
-        x: subnet.x + 40 + (aws.instances.length % 3) * 54,
-        y: subnet.y + 80 + (aws.instances.length % 3) * 42,
+        x: position?.x ?? subnet.x + 40 + (aws.instances.length % 3) * 54,
+        y: position?.y ?? subnet.y + 80 + (aws.instances.length % 3) * 42,
       };
       setAws((current) => ({ ...current, instances: [...current.instances, resource] }));
       setSelectedId(resource.id);
+      setAwsContextMenu(null);
       return;
     }
 
-    if (newAwsType === 'alb' || newAwsType === 'elb') {
+    if (typeOverride === 'alb' || typeOverride === 'elb') {
       const subnet = publicSubnet;
       const resource = {
-        id: `${newAwsType}-${suffix}`,
-        name: newAwsType === 'alb' ? `Application LB ${nextCount}` : `Classic ELB ${nextCount}`,
-        type: newAwsType,
+        id: `${typeOverride}-${suffix}`,
+        name: typeOverride === 'alb' ? `Application LB ${nextCount}` : `Classic ELB ${nextCount}`,
+        type: typeOverride,
         scheme: 'internet-facing',
         subnetIds: [subnet.id],
         privateIp: `10.20.1.${40 + aws.loadBalancers.length}`,
-        dnsName: `${newAwsType}-${suffix}.example.aws`,
+        dnsName: `${typeOverride}-${suffix}.example.aws`,
         securityGroupIds: ['sg-alb'],
         targetIds: aws.instances.filter((item) => item.subnetId === privateSubnet.id).slice(0, 1).map((item) => item.id),
-        x: subnet.x + 45 + (aws.loadBalancers.length % 2) * 70,
-        y: subnet.y + 40 + (aws.loadBalancers.length % 2) * 80,
+        x: position?.x ?? subnet.x + 45 + (aws.loadBalancers.length % 2) * 70,
+        y: position?.y ?? subnet.y + 40 + (aws.loadBalancers.length % 2) * 80,
       };
       setAws((current) => ({ ...current, loadBalancers: [...current.loadBalancers, resource] }));
       setSelectedId(resource.id);
+      setAwsContextMenu(null);
       return;
     }
 
-    if (newAwsType === 'nat') {
+    if (typeOverride === 'nat') {
       const subnet = publicSubnet;
-      const resource = { id: `nat-${suffix}`, type: 'nat', name: `NAT Gateway ${nextCount}`, subnetId: subnet.id, privateIp: `10.20.1.${60 + aws.gateways.length}`, publicIp: `54.12.0.${60 + aws.gateways.length}`, x: subnet.x + 90, y: subnet.y + 180 };
+      const resource = { id: `nat-${suffix}`, type: 'nat', name: `NAT Gateway ${nextCount}`, subnetId: subnet.id, privateIp: `10.20.1.${60 + aws.gateways.length}`, publicIp: `54.12.0.${60 + aws.gateways.length}`, x: position?.x ?? subnet.x + 90, y: position?.y ?? subnet.y + 180 };
       setAws((current) => ({ ...current, gateways: [...current.gateways, resource] }));
       setSelectedId(resource.id);
+      setAwsContextMenu(null);
       return;
     }
 
-    if (newAwsType === 'subnet') {
-      const resource = { id: `subnet-${suffix}`, vpcId: 'vpc-main', name: `Extra subnet ${aws.subnets.length + 1}`, cidr: `10.20.${4 + aws.subnets.length}.0/24`, az: 'eu-west-1a', routeTableId: dataSubnet.routeTableId, naclId: 'nacl-default', x: 140 + aws.subnets.length * 28, y: 445, width: 230, height: 115 };
+    if (typeOverride === 'subnet') {
+      const resource = { id: `subnet-${suffix}`, vpcId: 'vpc-main', name: `Extra subnet ${aws.subnets.length + 1}`, cidr: `10.20.${4 + aws.subnets.length}.0/24`, az: 'eu-west-1a', routeTableId: dataSubnet.routeTableId, naclId: 'nacl-default', x: position?.x ?? 140 + aws.subnets.length * 28, y: position?.y ?? 445, width: 230, height: 115 };
       setAws((current) => ({ ...current, subnets: [...current.subnets, resource] }));
       setSelectedId(resource.id);
+      setAwsContextMenu(null);
     }
   };
 
@@ -1507,6 +1596,75 @@ function AwsLab({ aws, setAws }) {
     setSelectedId('vpc-main');
     setVisual({ resources: {}, subnets: {}, vpcs: {}, routes: {} });
     setTrace([{ id: `aws-reset-${Date.now()}`, ok: true, title: 'AWS topology reset', lines: ['Default VPC scenario restored.'] }]);
+  };
+
+  const openAwsBoardMenu = (event) => {
+    event.preventDefault();
+    if (!awsBoardRef.current) return;
+    setAwsContextMenu({ kind: 'canvas', x: event.clientX, y: event.clientY, boardPoint: boardDropPoint(event, awsBoardRef.current, awsZoom, 118, 62) });
+  };
+
+  const openAwsResourceMenu = (event, resourceId) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setAwsContextMenu({ kind: 'resource', x: event.clientX, y: event.clientY, resourceId, selectedResourceId: selectedId });
+  };
+
+  const startAwsDrag = (event, resource, width = 118, height = 62) => {
+    if (event.button !== 0 || resource.id === 'internet') return;
+    const collection = awsCollectionForResource(resource);
+    if (!collection) return;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    const rect = event.currentTarget.getBoundingClientRect();
+    setAwsDragging({
+      id: resource.id,
+      collection,
+      childIds: awsChildResourceIds(aws, resource),
+      offsetX: (event.clientX - rect.left) / awsZoom,
+      offsetY: (event.clientY - rect.top) / awsZoom,
+      lastX: resource.x,
+      lastY: resource.y,
+      width,
+      height,
+    });
+  };
+
+  const deleteAwsResource = (resourceId) => {
+    const resource = findAwsResource(aws, resourceId);
+    const collection = awsCollectionForResource(resource);
+    if (!collection || resourceId === 'vpc-main') return;
+    setAws((current) => ({
+      ...current,
+      [collection]: current[collection].filter((item) => item.id !== resourceId),
+      loadBalancers: current.loadBalancers.map((lb) => ({ ...lb, targetIds: lb.targetIds.filter((id) => id !== resourceId) })),
+    }));
+    if (selectedId === resourceId) setSelectedId('vpc-main');
+    setVisual({ resources: {}, subnets: {}, vpcs: {}, routes: {} });
+    setAwsContextMenu(null);
+  };
+
+  const duplicateAwsResource = (resourceId) => {
+    const resource = findAwsResource(aws, resourceId);
+    const collection = awsCollectionForResource(resource);
+    if (!collection || resourceId === 'internet') return;
+    const id = `${resource.type || collection}-${Date.now().toString(36)}`;
+    const copy = { ...resource, id, name: `${resource.name} copy`, x: resource.x + 34, y: resource.y + 34 };
+    setAws((current) => ({ ...current, [collection]: [...current[collection], copy] }));
+    setSelectedId(id);
+    setVisual({ resources: {}, subnets: {}, vpcs: {}, routes: {} });
+    setAwsContextMenu(null);
+  };
+
+  const simulateAwsFromSelected = (sourceId, targetId) => {
+    if (!resources.some((resource) => resource.id === sourceId) || !resources.some((resource) => resource.id === targetId) || sourceId === targetId) return;
+    const nextTraffic = { ...traffic, source: sourceId, target: targetId };
+    const result = simulateAwsTraffic(aws, nextTraffic.source, nextTraffic.target, nextTraffic.protocol);
+    const source = findAwsResource(aws, sourceId)?.name || 'Unknown';
+    const target = findAwsResource(aws, targetId)?.name || 'Unknown';
+    setTraffic(nextTraffic);
+    setVisual(result.visual);
+    setTrace((items) => [{ id: `aws-${Date.now()}`, ok: result.ok, title: `${source} -> ${target} ${result.ok ? 'allowed' : 'blocked'}`, lines: result.trace }, ...items]);
+    setAwsContextMenu(null);
   };
 
   const awsLines = [
@@ -1537,7 +1695,7 @@ function AwsLab({ aws, setAws }) {
                 <option value="nat">NAT Gateway</option>
                 <option value="subnet">Subnet</option>
               </select>
-              <button onClick={addAwsResource}>Add AWS</button>
+              <button onClick={() => addAwsResource()}>Add AWS</button>
               <div className="zoom-controls" aria-label="AWS topology zoom controls">
                 <button className="ghost" onClick={() => changeAwsZoom(-0.1)} aria-label="Zoom out">-</button>
                 <span>{Math.round(awsZoom * 100)}%</span>
@@ -1547,7 +1705,7 @@ function AwsLab({ aws, setAws }) {
               <button className="ghost" onClick={resetAws}>Reset AWS</button>
             </div>
           </div>
-          <div className="aws-board">
+          <div ref={awsBoardRef} className="aws-board" onContextMenu={openAwsBoardMenu}>
             <div className="aws-board-content" style={{ transform: `scale(${awsZoom})` }}>
               <svg className="aws-lines" aria-hidden="true">
                 {awsLines.map(([fromId, toId]) => {
@@ -1558,33 +1716,48 @@ function AwsLab({ aws, setAws }) {
                   return <line key={`${fromId}-${toId}`} className={active} x1={(from.x || 0) + 42} y1={(from.y || 0) + 28} x2={(to.x || 0) + 42} y2={(to.y || 0) + 28} />;
                 })}
               </svg>
-              <button className={`aws-node internet ${visual.resources.internet || ''}`} style={{ left: 25, top: 40 }} onClick={() => setSelectedId('internet')}>Internet</button>
+              <button className={`aws-node internet ${visual.resources.internet || ''}`} style={{ left: 25, top: 40 }} onClick={() => setSelectedId('internet')} onContextMenu={(event) => openAwsResourceMenu(event, 'internet')}>Internet</button>
               {aws.vpcs.map((vpc) => (
-                <button key={vpc.id} className={`aws-vpc ${visual.vpcs[vpc.id] || ''} ${selectedId === vpc.id ? 'selected' : ''}`} style={{ left: vpc.x, top: vpc.y, width: vpc.width, height: vpc.height }} onClick={() => setSelectedId(vpc.id)}>
+                <button key={vpc.id} className={`aws-vpc ${visual.vpcs[vpc.id] || ''} ${selectedId === vpc.id ? 'selected' : ''}`} style={{ left: vpc.x, top: vpc.y, width: vpc.width, height: vpc.height }} onClick={() => setSelectedId(vpc.id)} onPointerDown={(event) => startAwsDrag(event, vpc, vpc.width, vpc.height)} onContextMenu={(event) => openAwsResourceMenu(event, vpc.id)}>
                   <strong>{vpc.name}</strong><span>{vpc.cidr}</span>
                 </button>
               ))}
               {aws.subnets.map((subnet) => (
-                <button key={subnet.id} className={`aws-subnet ${visual.subnets[subnet.id] || ''} ${selectedId === subnet.id ? 'selected' : ''}`} style={{ left: subnet.x, top: subnet.y, width: subnet.width, height: subnet.height }} onClick={() => setSelectedId(subnet.id)}>
+                <button key={subnet.id} className={`aws-subnet ${visual.subnets[subnet.id] || ''} ${selectedId === subnet.id ? 'selected' : ''}`} style={{ left: subnet.x, top: subnet.y, width: subnet.width, height: subnet.height }} onClick={() => setSelectedId(subnet.id)} onPointerDown={(event) => startAwsDrag(event, subnet, subnet.width, subnet.height)} onContextMenu={(event) => openAwsResourceMenu(event, subnet.id)}>
                   <strong>{subnet.name}</strong><span>{subnet.cidr} / {subnet.az}</span>
                 </button>
               ))}
               {aws.gateways.map((gateway) => (
-                <button key={gateway.id} className={`aws-node gateway ${visual.resources[gateway.id] || ''} ${selectedId === gateway.id ? 'selected' : ''}`} style={{ left: gateway.x, top: gateway.y }} onClick={() => setSelectedId(gateway.id)}>
+                <button key={gateway.id} className={`aws-node gateway ${visual.resources[gateway.id] || ''} ${selectedId === gateway.id ? 'selected' : ''}`} style={{ left: gateway.x, top: gateway.y }} onClick={() => setSelectedId(gateway.id)} onPointerDown={(event) => startAwsDrag(event, gateway)} onContextMenu={(event) => openAwsResourceMenu(event, gateway.id)}>
                   <span>{gateway.type.toUpperCase()}</span><strong>{gateway.name}</strong>
                 </button>
               ))}
               {aws.loadBalancers.map((lb) => (
-                <button key={lb.id} className={`aws-node ${lb.type || 'alb'} ${visual.resources[lb.id] || ''} ${selectedId === lb.id ? 'selected' : ''}`} style={{ left: lb.x, top: lb.y }} onClick={() => setSelectedId(lb.id)}>
+                <button key={lb.id} className={`aws-node ${lb.type || 'alb'} ${visual.resources[lb.id] || ''} ${selectedId === lb.id ? 'selected' : ''}`} style={{ left: lb.x, top: lb.y }} onClick={() => setSelectedId(lb.id)} onPointerDown={(event) => startAwsDrag(event, lb)} onContextMenu={(event) => openAwsResourceMenu(event, lb.id)}>
                   <span>{(lb.type || 'alb').toUpperCase()}</span><strong>{lb.name}</strong><small>{lb.dnsName}</small>
                 </button>
               ))}
               {aws.instances.map((instance) => (
-                <button key={instance.id} className={`aws-node ec2 ${visual.resources[instance.id] || ''} ${selectedId === instance.id ? 'selected' : ''}`} style={{ left: instance.x, top: instance.y }} onClick={() => setSelectedId(instance.id)}>
+                <button key={instance.id} className={`aws-node ec2 ${visual.resources[instance.id] || ''} ${selectedId === instance.id ? 'selected' : ''}`} style={{ left: instance.x, top: instance.y }} onClick={() => setSelectedId(instance.id)} onPointerDown={(event) => startAwsDrag(event, instance)} onContextMenu={(event) => openAwsResourceMenu(event, instance.id)}>
                   <span>EC2</span><strong>{instance.name}</strong><small>{instance.privateIp}</small>
                 </button>
               ))}
             </div>
+            {awsContextMenu && (
+              <AwsContextMenu
+                menu={awsContextMenu}
+                resource={awsContextMenu.resourceId ? findAwsResource(aws, awsContextMenu.resourceId) : null}
+                selectedResource={awsContextMenu.selectedResourceId ? findAwsResource(aws, awsContextMenu.selectedResourceId) : null}
+                isTrafficResource={(id) => resources.some((resource) => resource.id === id)}
+                onAddResource={addAwsResource}
+                onSelect={(id) => { setSelectedId(id); setAwsContextMenu(null); }}
+                onSetSource={(id) => { setTraffic((current) => ({ ...current, source: id })); setSelectedId(id); setAwsContextMenu(null); }}
+                onSetTarget={(id) => { setTraffic((current) => ({ ...current, target: id })); setSelectedId(id); setAwsContextMenu(null); }}
+                onSimulate={simulateAwsFromSelected}
+                onDuplicate={duplicateAwsResource}
+                onDelete={deleteAwsResource}
+              />
+            )}
           </div>
         </div>
 
@@ -1652,6 +1825,43 @@ function AwsLab({ aws, setAws }) {
         </div>
       </section>
     </>
+  );
+}
+
+function AwsContextMenu({ menu, resource, selectedResource, isTrafficResource, onAddResource, onSelect, onSetSource, onSetTarget, onSimulate, onDuplicate, onDelete }) {
+  const style = { left: menu.x, top: menu.y };
+
+  if (menu.kind === 'canvas') {
+    return (
+      <div className="context-menu" style={style} onClick={(event) => event.stopPropagation()} onContextMenu={(event) => event.preventDefault()}>
+        <strong>Add AWS resource here</strong>
+        <button onClick={() => onAddResource('ec2', menu.boardPoint)}>EC2</button>
+        <button onClick={() => onAddResource('alb', menu.boardPoint)}>ALB</button>
+        <button onClick={() => onAddResource('elb', menu.boardPoint)}>ELB</button>
+        <button onClick={() => onAddResource('nat', menu.boardPoint)}>NAT Gateway</button>
+        <button onClick={() => onAddResource('subnet', menu.boardPoint)}>Subnet</button>
+      </div>
+    );
+  }
+
+  if (!resource) return null;
+  const canUseInTraffic = isTrafficResource(resource.id);
+  const canSimulate = selectedResource && selectedResource.id !== resource.id && isTrafficResource(selectedResource.id) && canUseInTraffic;
+
+  return (
+    <div className="context-menu" style={style} onClick={(event) => event.stopPropagation()} onContextMenu={(event) => event.preventDefault()}>
+      <strong>{resource.name}</strong>
+      {selectedResource && selectedResource.id !== resource.id && (
+        <button disabled={!canSimulate} onClick={() => onSimulate(selectedResource.id, resource.id)}>
+          Simulate from {selectedResource.name}
+        </button>
+      )}
+      <button onClick={() => onSelect(resource.id)}>Select</button>
+      <button disabled={!canUseInTraffic} onClick={() => onSetSource(resource.id)}>Use as source</button>
+      <button disabled={!canUseInTraffic} onClick={() => onSetTarget(resource.id)}>Use as target</button>
+      <button disabled={resource.id === 'internet'} onClick={() => onDuplicate(resource.id)}>Duplicate</button>
+      <button disabled={resource.id === 'internet' || resource.id === 'vpc-main'} className="danger-item" onClick={() => onDelete(resource.id)}>Delete</button>
+    </div>
   );
 }
 

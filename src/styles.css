@@ -317,22 +317,19 @@ h3 {
 }
 
 .aws-lines line {
-  stroke: #94a3b8;
-  stroke-dasharray: 5 5;
+  stroke: #64748b;
   stroke-linecap: round;
-  stroke-width: 2;
+  stroke-width: 3;
 }
 
 .aws-lines line.success {
   stroke: #16a34a;
-  stroke-dasharray: none;
-  stroke-width: 4;
+  stroke-width: 5;
 }
 
 .aws-lines line.error {
   stroke: #dc2626;
-  stroke-dasharray: none;
-  stroke-width: 4;
+  stroke-width: 5;
 }
 
 .aws-vpc,
@@ -413,11 +410,26 @@ h3 {
   border-left-color: #22c55e;
 }
 
+.aws-vpc:hover,
+.aws-subnet:hover,
+.aws-node:hover {
+  background: #f8fafc;
+  border-color: #94a3b8;
+  outline: 2px solid rgba(100, 116, 139, 0.16);
+}
+
 .aws-vpc.selected,
 .aws-subnet.selected,
 .aws-node.selected {
-  outline: 4px solid rgba(37, 99, 235, 0.22);
+  background: #eff6ff;
   border-color: #2563eb;
+  outline: 4px solid rgba(37, 99, 235, 0.22);
+  box-shadow: 0 0 0 1px #ffffff inset, 0 8px 18px rgba(37, 99, 235, 0.16);
+}
+
+.aws-node.selected {
+  border: 2px solid #2563eb;
+  border-left: 7px solid #2563eb;
 }
 
 .aws-vpc.success,
