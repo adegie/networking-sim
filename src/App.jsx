@@ -220,6 +220,54 @@ function findIpOnSegment(devices, links, sourceEndpoint, ip) {
   return l2ReachableInterfaces(devices, links, sourceEndpoint).find(({ nic }) => nic?.ip === ip);
 }
 
+function findIpPathOnSegment(devices, links, sourceEndpoint, ip) {
+  const byEndpoint = new Map();
+  const switchPorts = new Map();
+  links.forEach((item) => {
+    const aKey = endpointKey(item.a);
+    const bKey = endpointKey(item.b);
+    byEndpoint.set(aKey, [...(byEndpoint.get(aKey) || []), { endpoint: item.b, linkId: item.id }]);
+    byEndpoint.set(bKey, [...(byEndpoint.get(bKey) || []), { endpoint: item.a, linkId: item.id }]);
+  });
+  devices.forEach((device) => {
+    if (device.type === 'switch') {
+      switchPorts.set(device.id, device.interfaces.map((nic) => ({ deviceId: device.id, interfaceId: nic.id })));
+    }
+  });
+
+  const queue = [{ endpoint: sourceEndpoint, linkIds: [], deviceIds: [sourceEndpoint.deviceId] }];
+  const visited = new Set();
+  const startKey = endpointKey(sourceEndpoint);
+  while (queue.length > 0) {
+    const current = queue.shift();
+    const key = endpointKey(current.endpoint);
+    if (visited.has(key)) continue;
+    visited.add(key);
+
+    const owner = getDevice(devices, current.endpoint.deviceId);
+    const nic = getInterface(devices, current.endpoint.deviceId, current.endpoint.interfaceId);
+    if (owner && owner.type !== 'switch' && key !== startKey && nic?.ip === ip) {
+      return { device: owner, nic, endpoint: current.endpoint, linkIds: current.linkIds, deviceIds: current.deviceIds };
+    }
+
+    for (const neighbor of byEndpoint.get(key) || []) {
+      queue.push({
+        endpoint: neighbor.endpoint,
+        linkIds: [...current.linkIds, neighbor.linkId],
+        deviceIds: [...new Set([...current.deviceIds, neighbor.endpoint.deviceId])],
+      });
+    }
+    if (owner?.type === 'switch') {
+      for (const port of switchPorts.get(owner.id) || []) {
+        if (endpointKey(port) !== key) {
+          queue.push({ endpoint: port, linkIds: current.linkIds, deviceIds: current.deviceIds });
+        }
+      }
+    }
+  }
+  return null;
+}
+
 function chooseSourceInterface(device, destinationIp) {
   return (
     device.interfaces.find((nic) => nic.ip && nic.mask && sameSubnet(nic.ip, nic.mask, destinationIp)) ||
@@ -229,12 +277,32 @@ function chooseSourceInterface(device, destinationIp) {
 
 function simulatePing(devices, links, sourceDeviceId, destinationIp) {
   const trace = [];
+  const visual = { nodes: {}, links: {} };
+  const markOk = (deviceIds = [], linkIds = []) => {
+    deviceIds.forEach((id) => {
+      if (visual.nodes[id] !== 'error') visual.nodes[id] = 'success';
+    });
+    linkIds.forEach((id) => {
+      if (visual.links[id] !== 'error') visual.links[id] = 'success';
+    });
+  };
+  const markError = (deviceIds = [], linkIds = []) => {
+    deviceIds.forEach((id) => {
+      visual.nodes[id] = 'error';
+    });
+    linkIds.forEach((id) => {
+      visual.links[id] = 'error';
+    });
+  };
   const source = getDevice(devices, sourceDeviceId);
-  if (!source) return { ok: false, trace: ['Source device does not exist.'], updates: [] };
-  if (parseIPv4(destinationIp) === null) return { ok: false, trace: ['Destination IP address is invalid.'], updates: [] };
+  if (!source) return { ok: false, trace: ['Source device does not exist.'], updates: [], visual };
+  if (parseIPv4(destinationIp) === null) return { ok: false, trace: ['Destination IP address is invalid.'], updates: [], visual };
 
   const sourceNic = chooseSourceInterface(source, destinationIp);
-  if (!sourceNic) return { ok: false, trace: [`${source.name} has no configured IP interface.`], updates: [] };
+  if (!sourceNic) {
+    markError([source.id]);
+    return { ok: false, trace: [`${source.name} has no configured IP interface.`], updates: [], visual };
+  }
 
   const updates = [];
   const visitedRouters = new Set();
@@ -247,22 +315,26 @@ function simulatePing(devices, links, sourceDeviceId, destinationIp) {
     } else {
       trace.push(`${device.name} broadcasts ARP on ${nic.name}: who has ${targetIp}?`);
     }
-    const target = findIpOnSegment(devices, links, endpoint, targetIp);
+    const target = findIpPathOnSegment(devices, links, endpoint, targetIp);
     if (!target) {
       trace.push(`No interface with ${targetIp} answered on that Ethernet segment.`);
+      markError([device.id]);
       return null;
     }
     trace.push(`${target.device.name} replies with MAC ${target.nic.mac}.`);
     updates.push({ deviceId: device.id, ip: targetIp, mac: target.nic.mac });
+    markOk(target.deviceIds, target.linkIds);
     return target;
   };
 
   const deliverFromRouter = (router, destination) => {
     if (visitedRouters.has(router.id)) {
       trace.push(`Routing loop detected at ${router.name}.`);
+      markError([router.id]);
       return false;
     }
     visitedRouters.add(router.id);
+    markOk([router.id]);
 
     const directNic = router.interfaces.find((nic) => nic.ip && nic.mask && sameSubnet(nic.ip, nic.mask, destination));
     if (directNic) {
@@ -271,17 +343,20 @@ function simulatePing(devices, links, sourceDeviceId, destinationIp) {
       if (!finalTarget) return false;
       trace.push(`ICMP echo reaches ${finalTarget.device.name}; echo reply follows the reverse path.`);
       updates.push({ deviceId: finalTarget.device.id, ip: directNic.ip, mac: directNic.mac });
+      markOk([finalTarget.device.id]);
       return true;
     }
 
     const route = [...router.routes].filter((item) => routeMatches(item, destination)).sort((a, b) => maskBits(b.mask) - maskBits(a.mask))[0];
     if (!route) {
       trace.push(`${router.name} has no route to ${destination}.`);
+      markError([router.id]);
       return false;
     }
     const outgoingNic = router.interfaces.find((nic) => nic.id === route.interfaceId) || router.interfaces.find((nic) => nic.ip && nic.mask && sameSubnet(nic.ip, nic.mask, route.nextHop));
     if (!outgoingNic) {
       trace.push(`${router.name} cannot choose an outgoing interface for route ${route.network}/${route.mask}.`);
+      markError([router.id]);
       return false;
     }
     trace.push(`${router.name} forwards by static route ${route.network}/${route.mask} toward ${route.nextHop}.`);
@@ -289,6 +364,7 @@ function simulatePing(devices, links, sourceDeviceId, destinationIp) {
     if (!nextHop) return false;
     if (nextHop.device.type !== 'router') {
       trace.push(`${nextHop.device.name} is not a router, so the packet stops.`);
+      markError([nextHop.device.id]);
       return false;
     }
     return deliverFromRouter(nextHop.device, destination);
@@ -300,26 +376,30 @@ function simulatePing(devices, links, sourceDeviceId, destinationIp) {
       ok: false,
       trace: [`${source.name} needs a default gateway to reach ${destinationIp}.`],
       updates: [],
+      visual: { nodes: { [source.id]: 'error' }, links: {} },
     };
   }
 
+  markOk([source.id]);
   trace.push(`${source.name} sends ICMP echo from ${sourceNic.ip} to ${destinationIp}.`);
   const firstHop = arpResolve(source, sourceNic, nextHopIp);
-  if (!firstHop) return { ok: false, trace, updates };
+  if (!firstHop) return { ok: false, trace, updates, visual };
 
   if (firstHop.nic.ip === destinationIp) {
     trace.push(`ICMP echo reaches ${firstHop.device.name}; echo reply is delivered on the same Ethernet segment.`);
     updates.push({ deviceId: firstHop.device.id, ip: sourceNic.ip, mac: sourceNic.mac });
-    return { ok: true, trace, updates };
+    markOk([firstHop.device.id]);
+    return { ok: true, trace, updates, visual };
   }
 
   if (firstHop.device.type !== 'router') {
     trace.push(`${firstHop.device.name} is not a router for off-subnet traffic.`);
-    return { ok: false, trace, updates };
+    markError([firstHop.device.id]);
+    return { ok: false, trace, updates, visual };
   }
 
   const ok = deliverFromRouter(firstHop.device, destinationIp);
-  return { ok, trace, updates };
+  return { ok, trace, updates, visual };
 }
 
 function applyArpUpdates(devices, updates) {
@@ -386,6 +466,7 @@ function App() {
   const [log, setLog] = useState([
     { id: 'welcome', ok: true, title: 'Welcome', lines: ['Try pinging 10.0.0.20 from Workstation A, then inspect ARP tables.'] },
   ]);
+  const [pingVisual, setPingVisual] = useState({ nodes: {}, links: {} });
   const [dragging, setDragging] = useState(null);
   const [contextMenu, setContextMenu] = useState(null);
   const boardRef = useRef(null);
@@ -445,6 +526,7 @@ function App() {
     };
     setDevices((items) => [...items, created]);
     setSelectedId(id);
+    setPingVisual({ nodes: {}, links: {} });
     setContextMenu(null);
   };
 
@@ -473,12 +555,14 @@ function App() {
     };
     setDevices((items) => [...items, created]);
     setSelectedId(id);
+    setPingVisual({ nodes: {}, links: {} });
     setContextMenu(null);
   };
 
   const removeDevice = (deviceId) => {
     setDevices((items) => items.filter((item) => item.id !== deviceId));
     setLinks((items) => items.filter((item) => item.a.deviceId !== deviceId && item.b.deviceId !== deviceId));
+    setPingVisual({ nodes: {}, links: {} });
     setContextMenu(null);
   };
 
@@ -547,9 +631,13 @@ function App() {
     if (occupied.has(endpointKey(a)) || occupied.has(endpointKey(b))) return;
     setLinks((items) => [...items, link(fromDevice, fromInterface, toDevice, toInterface)]);
     setLinkDraft({ fromDevice: '', fromInterface: '', toDevice: '', toInterface: '' });
+    setPingVisual({ nodes: {}, links: {} });
   };
 
-  const removeLink = (linkId) => setLinks((items) => items.filter((item) => item.id !== linkId));
+  const removeLink = (linkId) => {
+    setLinks((items) => items.filter((item) => item.id !== linkId));
+    setPingVisual({ nodes: {}, links: {} });
+  };
 
   const addManualArp = (deviceId) => {
     const ip = window.prompt('IP address to map');
@@ -596,6 +684,7 @@ function App() {
   const runPing = () => {
     const result = simulatePing(devices, links, pingDraft.source, pingDraft.destination.trim());
     setDevices((items) => applyArpUpdates(items, result.updates));
+    setPingVisual(result.visual || { nodes: {}, links: {} });
     const source = getDevice(devices, pingDraft.source)?.name || 'Unknown';
     setLog((items) => [
       {
@@ -638,6 +727,7 @@ function App() {
       const firstPingSource = imported.devices.find((device) => device.type !== 'switch') || firstDevice;
       setDevices(imported.devices);
       setLinks(imported.links);
+      setPingVisual({ nodes: {}, links: {} });
       setSelectedId(firstDevice?.id || '');
       setLinkDraft({ fromDevice: '', fromInterface: '', toDevice: '', toInterface: '' });
       setPingDraft((current) => ({ ...current, source: firstPingSource?.id || '', destination: current.destination }));
@@ -684,7 +774,7 @@ function App() {
                 const a = getDevice(devices, item.a.deviceId);
                 const b = getDevice(devices, item.b.deviceId);
                 if (!a || !b) return null;
-                return <line key={item.id} x1={a.x + 56} y1={a.y + 40} x2={b.x + 56} y2={b.y + 40} />;
+                return <line key={item.id} className={pingVisual.links[item.id] || ''} x1={a.x + 56} y1={a.y + 40} x2={b.x + 56} y2={b.y + 40} />;
               })}
             </svg>
             {devices.map((device) => {
@@ -693,7 +783,7 @@ function App() {
               return (
                 <button
                   key={device.id}
-                  className={`node ${selected?.id === device.id ? 'selected' : ''}`}
+                  className={`node ${selected?.id === device.id ? 'selected' : ''} ${pingVisual.nodes[device.id] || ''}`}
                   style={{ left: device.x, top: device.y, '--accent': type.color }}
                   onClick={() => setSelectedId(device.id)}
                   onPointerDown={(event) => {
