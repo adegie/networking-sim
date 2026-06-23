@@ -255,6 +255,55 @@ h3 {
   stroke-width: 5;
 }
 
+.endpoint-label {
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid #cbd5e1;
+  border-radius: 0.4rem;
+  color: #334155;
+  display: grid;
+  font-size: 0.68rem;
+  gap: 0.05rem;
+  line-height: 1.15;
+  max-width: 138px;
+  padding: 0.22rem 0.32rem;
+  pointer-events: none;
+  position: absolute;
+  z-index: 2;
+}
+
+.endpoint-label.left {
+  text-align: right;
+}
+
+.endpoint-name {
+  color: #475569;
+  font-weight: 750;
+}
+
+.endpoint-ip {
+  color: #0f172a;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  white-space: nowrap;
+}
+
+.ip-network {
+  font-weight: 900;
+}
+
+.ip-partial {
+  font-weight: 750;
+}
+
+.ip-host,
+.ip-prefix {
+  font-weight: 400;
+}
+
+.ip-prefix,
+.muted-ip {
+  color: #64748b;
+}
+
 .node {
   align-items: start;
   background: #ffffff;
@@ -268,6 +317,7 @@ h3 {
   position: absolute;
   text-align: left;
   width: 112px;
+  z-index: 3;
 }
 
 .node span {

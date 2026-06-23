@@ -308,6 +308,19 @@ function natTranslationId(insideIp, outsideIp, destinationIp) {
   return `${insideIp}->${outsideIp}:${destinationIp}:icmp`;
 }
 
+function ipPrefixParts(ip, mask) {
+  const bits = maskBits(mask);
+  if (!ip || bits < 0) return null;
+  const octets = ip.split('.');
+  if (octets.length !== 4) return null;
+  return {
+    bits,
+    fullOctets: Math.floor(bits / 8),
+    hasPartialOctet: bits % 8 !== 0,
+    octets,
+  };
+}
+
 function simulatePing(devices, links, sourceDeviceId, destinationIp) {
   const trace = [];
   const visual = { nodes: {}, links: {} };
@@ -932,6 +945,17 @@ function App() {
                   return <line key={item.id} className={pingVisual.links[item.id] || ''} x1={a.x + 56} y1={a.y + 40} x2={b.x + 56} y2={b.y + 40} />;
                 })}
               </svg>
+              {links.flatMap((item) => {
+                const a = getDevice(devices, item.a.deviceId);
+                const b = getDevice(devices, item.b.deviceId);
+                const aNic = getInterface(devices, item.a.deviceId, item.a.interfaceId);
+                const bNic = getInterface(devices, item.b.deviceId, item.b.interfaceId);
+                if (!a || !b || !aNic || !bNic) return [];
+                return [
+                  <EndpointLabel key={`${item.id}-a`} device={a} otherDevice={b} nic={aNic} />,
+                  <EndpointLabel key={`${item.id}-b`} device={b} otherDevice={a} nic={bNic} />,
+                ];
+              })}
               {devices.map((device) => {
                 const type = DEVICE_TYPES[device.type];
                 const configured = device.interfaces.filter((nic) => nic.ip).length;
@@ -1064,6 +1088,41 @@ function App() {
         </div>
       </section>
     </main>
+  );
+}
+
+function EndpointLabel({ device, otherDevice, nic }) {
+  const rightSide = otherDevice.x >= device.x;
+  const verticalOffset = otherDevice.y > device.y + 35 ? 28 : otherDevice.y < device.y - 35 ? -34 : -8;
+  return (
+    <div
+      className={`endpoint-label ${rightSide ? 'right' : 'left'}`}
+      style={{ left: rightSide ? device.x + 116 : device.x - 142, top: device.y + 34 + verticalOffset }}
+    >
+      <span className="endpoint-name">{nic.name}</span>
+      <FormattedIp ip={nic.ip} mask={nic.mask} />
+    </div>
+  );
+}
+
+function FormattedIp({ ip, mask }) {
+  const parts = ipPrefixParts(ip, mask);
+  if (!parts) return <span className="endpoint-ip muted-ip">no IP</span>;
+
+  return (
+    <span className="endpoint-ip" title={`/${parts.bits}`}>
+      {parts.octets.map((octet, index) => {
+        const isNetwork = index < parts.fullOctets;
+        const isPartial = index === parts.fullOctets && parts.hasPartialOctet;
+        const className = isNetwork ? 'ip-network' : isPartial ? 'ip-partial' : 'ip-host';
+        return (
+          <span key={`${octet}-${index}`} className={className}>
+            {octet}{index < 3 ? '.' : ''}
+          </span>
+        );
+      })}
+      <span className="ip-prefix">/{parts.bits}</span>
+    </span>
   );
 }
 
