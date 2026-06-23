@@ -630,17 +630,19 @@ function DeviceEditor({ device, links, occupied, onUpdate, onUpdateInterface, on
         <button className="danger" onClick={() => onRemoveDevice(device.id)}>Delete</button>
       </div>
 
-      <label>
-        Name
-        <input value={device.name} onChange={(event) => onUpdate(device.id, { name: event.target.value })} />
-      </label>
-
-      {device.type === 'host' && (
+      <div className={device.type === 'host' ? 'device-fields' : 'device-fields single'}>
         <label>
-          Default gateway
-          <input value={device.gateway} onChange={(event) => onUpdate(device.id, { gateway: event.target.value })} placeholder="192.168.1.1" />
+          Name
+          <input value={device.name} onChange={(event) => onUpdate(device.id, { name: event.target.value })} />
         </label>
-      )}
+
+        {device.type === 'host' && (
+          <label>
+            Default gateway
+            <input value={device.gateway} onChange={(event) => onUpdate(device.id, { gateway: event.target.value })} placeholder="192.168.1.1" />
+          </label>
+        )}
+      </div>
 
       <div className="section-title">
         <h3>Interfaces</h3>
@@ -657,22 +659,24 @@ function DeviceEditor({ device, links, occupied, onUpdate, onUpdateInterface, on
                 <input value={nic.name} onChange={(event) => onUpdateInterface(device.id, nic.id, { name: event.target.value })} />
                 <span className={connected ? 'status live' : 'status'}>{connected ? 'linked' : 'down'}</span>
               </div>
-              <label>
-                MAC
-                <input value={nic.mac} onChange={(event) => onUpdateInterface(device.id, nic.id, { mac: event.target.value })} />
-              </label>
-              {device.type !== 'switch' && (
-                <div className="two-col">
-                  <label>
-                    IP address
-                    <input value={nic.ip} onChange={(event) => onUpdateInterface(device.id, nic.id, { ip: event.target.value })} placeholder="192.168.1.10" />
-                  </label>
-                  <label>
-                    Mask
-                    <input value={nic.mask} onChange={(event) => onUpdateInterface(device.id, nic.id, { mask: event.target.value })} placeholder="255.255.255.0 or /24" />
-                  </label>
-                </div>
-              )}
+              <div className={device.type === 'switch' ? 'interface-fields switch-fields' : 'interface-fields'}>
+                <label>
+                  MAC
+                  <input value={nic.mac} onChange={(event) => onUpdateInterface(device.id, nic.id, { mac: event.target.value })} />
+                </label>
+                {device.type !== 'switch' && (
+                  <>
+                    <label>
+                      IP address
+                      <input value={nic.ip} onChange={(event) => onUpdateInterface(device.id, nic.id, { ip: event.target.value })} placeholder="192.168.1.10" />
+                    </label>
+                    <label>
+                      Mask
+                      <input value={nic.mask} onChange={(event) => onUpdateInterface(device.id, nic.id, { mask: event.target.value })} placeholder="255.255.255.0 or /24" />
+                    </label>
+                  </>
+                )}
+              </div>
               {network && <small>Network {network}/{maskBits(nic.mask)}</small>}
             </div>
           );
