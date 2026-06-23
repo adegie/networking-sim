@@ -470,6 +470,7 @@ function App() {
   const [log, setLog] = useState([
     { id: 'welcome', ok: true, title: 'Welcome', lines: ['Try pinging 10.0.0.20 from Workstation A, then inspect ARP tables.'] },
   ]);
+  const [topologyZoom, setTopologyZoom] = useState(1);
   const [pingVisual, setPingVisual] = useState({ nodes: {}, links: {} });
   const [dragging, setDragging] = useState(null);
   const [contextMenu, setContextMenu] = useState(null);
@@ -509,8 +510,10 @@ function App() {
     const onMove = (event) => {
       if (!dragging || !boardRef.current) return;
       const rect = boardRef.current.getBoundingClientRect();
-      const x = Math.max(20, Math.min(rect.width - 120, event.clientX - rect.left - dragging.offsetX));
-      const y = Math.max(20, Math.min(rect.height - 90, event.clientY - rect.top - dragging.offsetY));
+      const logicalWidth = rect.width / topologyZoom;
+      const logicalHeight = rect.height / topologyZoom;
+      const x = Math.max(20, Math.min(logicalWidth - 120, (event.clientX - rect.left) / topologyZoom - dragging.offsetX));
+      const y = Math.max(20, Math.min(logicalHeight - 90, (event.clientY - rect.top) / topologyZoom - dragging.offsetY));
       setDevices((items) => items.map((item) => (item.id === dragging.id ? { ...item, x, y } : item)));
     };
     const onUp = () => setDragging(null);
@@ -520,7 +523,11 @@ function App() {
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
     };
-  }, [dragging]);
+  }, [dragging, topologyZoom]);
+
+  const changeTopologyZoom = (delta) => {
+    setTopologyZoom((current) => Math.max(0.5, Math.min(1.75, Number((current + delta).toFixed(2)))));
+  };
 
   const addDevice = (typeOverride = newType, position = null) => {
     const id = `${typeOverride}-${Date.now().toString(36)}`;
@@ -688,9 +695,11 @@ function App() {
 
   const getBoardPoint = (event) => {
     const rect = boardRef.current.getBoundingClientRect();
+    const logicalWidth = rect.width / topologyZoom;
+    const logicalHeight = rect.height / topologyZoom;
     return {
-      x: Math.max(20, Math.min(rect.width - 120, event.clientX - rect.left - 56)),
-      y: Math.max(20, Math.min(rect.height - 90, event.clientY - rect.top - 40)),
+      x: Math.max(20, Math.min(logicalWidth - 120, (event.clientX - rect.left) / topologyZoom - 56)),
+      y: Math.max(20, Math.min(logicalHeight - 90, (event.clientY - rect.top) / topologyZoom - 40)),
     };
   };
 
@@ -837,44 +846,51 @@ function App() {
       <section className="workspace">
         <div className="canvas-card">
           <div className="card-heading">
-            <div>
+            <div className="topology-title">
               <h2>Topology</h2>
-              <p>Drag nodes, patch ports, then send traffic.</p>
+              <span>{devices.length} devices / {links.length} links</span>
             </div>
-            <span>{devices.length} devices / {links.length} links</span>
+            <div className="zoom-controls" aria-label="Topology zoom controls">
+              <button className="ghost" onClick={() => changeTopologyZoom(-0.1)} aria-label="Zoom out">-</button>
+              <span>{Math.round(topologyZoom * 100)}%</span>
+              <button className="ghost" onClick={() => changeTopologyZoom(0.1)} aria-label="Zoom in">+</button>
+              <button className="ghost" onClick={() => setTopologyZoom(1)}>Reset</button>
+            </div>
           </div>
           <div ref={boardRef} className="board" onContextMenu={openCanvasMenu}>
-            <svg className="links" aria-hidden="true">
-              {links.map((item) => {
-                const a = getDevice(devices, item.a.deviceId);
-                const b = getDevice(devices, item.b.deviceId);
-                if (!a || !b) return null;
-                return <line key={item.id} className={pingVisual.links[item.id] || ''} x1={a.x + 56} y1={a.y + 40} x2={b.x + 56} y2={b.y + 40} />;
+            <div className="board-content" style={{ transform: `scale(${topologyZoom})` }}>
+              <svg className="links" aria-hidden="true">
+                {links.map((item) => {
+                  const a = getDevice(devices, item.a.deviceId);
+                  const b = getDevice(devices, item.b.deviceId);
+                  if (!a || !b) return null;
+                  return <line key={item.id} className={pingVisual.links[item.id] || ''} x1={a.x + 56} y1={a.y + 40} x2={b.x + 56} y2={b.y + 40} />;
+                })}
+              </svg>
+              {devices.map((device) => {
+                const type = DEVICE_TYPES[device.type];
+                const configured = device.interfaces.filter((nic) => nic.ip).length;
+                return (
+                  <button
+                    key={device.id}
+                    className={`node ${selected?.id === device.id ? 'selected' : ''} ${pingVisual.nodes[device.id] || ''}`}
+                    style={{ left: device.x, top: device.y, '--accent': type.color }}
+                    onClick={() => selectDevice(device.id)}
+                    onPointerDown={(event) => {
+                      if (event.button !== 0) return;
+                      event.currentTarget.setPointerCapture(event.pointerId);
+                      const rect = event.currentTarget.getBoundingClientRect();
+                      setDragging({ id: device.id, offsetX: (event.clientX - rect.left) / topologyZoom, offsetY: (event.clientY - rect.top) / topologyZoom });
+                    }}
+                    onContextMenu={(event) => openDeviceMenu(event, device.id)}
+                  >
+                    <span>{type.icon}</span>
+                    <strong>{device.name}</strong>
+                    <small>{configured}/{device.interfaces.length} IP ports</small>
+                  </button>
+                );
               })}
-            </svg>
-            {devices.map((device) => {
-              const type = DEVICE_TYPES[device.type];
-              const configured = device.interfaces.filter((nic) => nic.ip).length;
-              return (
-                <button
-                  key={device.id}
-                  className={`node ${selected?.id === device.id ? 'selected' : ''} ${pingVisual.nodes[device.id] || ''}`}
-                  style={{ left: device.x, top: device.y, '--accent': type.color }}
-                  onClick={() => selectDevice(device.id)}
-                  onPointerDown={(event) => {
-                    if (event.button !== 0) return;
-                    event.currentTarget.setPointerCapture(event.pointerId);
-                    const rect = event.currentTarget.getBoundingClientRect();
-                    setDragging({ id: device.id, offsetX: event.clientX - rect.left, offsetY: event.clientY - rect.top });
-                  }}
-                  onContextMenu={(event) => openDeviceMenu(event, device.id)}
-                >
-                  <span>{type.icon}</span>
-                  <strong>{device.name}</strong>
-                  <small>{configured}/{device.interfaces.length} IP ports</small>
-                </button>
-              );
-            })}
+            </div>
             {contextMenu && (
               <TopologyContextMenu
                 menu={contextMenu}

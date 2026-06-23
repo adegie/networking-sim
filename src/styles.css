@@ -31,7 +31,7 @@ button {
   color: #ffffff;
   cursor: pointer;
   font-weight: 700;
-  padding: 0.52rem 0.75rem;
+  padding: 0.42rem 0.62rem;
 }
 
 button:hover {
@@ -50,7 +50,7 @@ button.ghost {
   border-color: #ccd5df;
   color: #334155;
   font-weight: 650;
-  padding: 0.48rem 0.68rem;
+  padding: 0.38rem 0.55rem;
 }
 
 button.ghost:hover {
@@ -74,7 +74,7 @@ select {
   border-radius: 0.45rem;
   background: #ffffff;
   color: #17202a;
-  padding: 0.5rem 0.58rem;
+  padding: 0.42rem 0.5rem;
   outline: none;
 }
 
@@ -102,12 +102,12 @@ p {
 }
 
 h1 {
-  font-size: clamp(1.35rem, 3vw, 2rem);
+  font-size: clamp(1.1rem, 2vw, 1.45rem);
   line-height: 1.15;
 }
 
 h2 {
-  font-size: 1.02rem;
+  font-size: 0.98rem;
 }
 
 h3 {
@@ -117,41 +117,41 @@ h3 {
 
 .app-shell {
   display: grid;
-  gap: 1rem;
+  gap: 0.55rem;
   margin: 0 auto;
-  max-width: 1560px;
-  padding: 1rem;
+  max-width: none;
+  padding: 0.55rem;
 }
 
 .top-bar {
   align-items: center;
   background: #ffffff;
   border: 1px solid #d7dee7;
-  border-radius: 0.8rem;
+  border-radius: 0.55rem;
   display: flex;
-  gap: 1rem;
+  gap: 0.7rem;
   justify-content: space-between;
-  padding: 0.9rem 1rem;
+  padding: 0.5rem 0.65rem;
 }
 
 .quick-actions {
   display: grid;
-  gap: 0.6rem;
+  gap: 0.45rem;
   grid-template-columns: 150px auto auto auto;
 }
 
 .workspace {
   align-items: start;
   display: grid;
-  gap: 1rem;
-  grid-template-columns: minmax(0, 1fr) 480px;
+  gap: 0.55rem;
+  grid-template-columns: minmax(0, 1fr) 500px;
 }
 
 .canvas-card,
 .panel {
   background: #ffffff;
   border: 1px solid #d7dee7;
-  border-radius: 0.8rem;
+  border-radius: 0.55rem;
 }
 
 .canvas-card {
@@ -160,24 +160,44 @@ h3 {
 
 .panel {
   display: grid;
-  gap: 0.75rem;
-  padding: 0.85rem;
+  gap: 0.55rem;
+  padding: 0.65rem;
 }
 
 .card-heading,
 .section-title {
   align-items: center;
   display: flex;
-  gap: 1rem;
+  gap: 0.65rem;
   justify-content: space-between;
-  padding: 1rem;
+  padding: 0.45rem 0.65rem;
 }
 
 .card-heading p,
 .card-heading span,
 .muted {
   color: #64748b;
-  font-size: 0.9rem;
+  font-size: 0.82rem;
+}
+
+.topology-title {
+  align-items: baseline;
+  display: flex;
+  gap: 0.7rem;
+}
+
+.zoom-controls {
+  align-items: center;
+  display: flex;
+  gap: 0.35rem;
+}
+
+.zoom-controls span {
+  color: #334155;
+  font-size: 0.82rem;
+  font-variant-numeric: tabular-nums;
+  min-width: 3rem;
+  text-align: center;
 }
 
 .card-heading.compact {
@@ -202,10 +222,20 @@ h3 {
   position: relative;
 }
 
+.board-content {
+  height: 100%;
+  left: 0;
+  position: absolute;
+  top: 0;
+  transform-origin: 0 0;
+  width: 100%;
+}
+
 .links {
   height: 100%;
   inset: 0;
   position: absolute;
+  overflow: visible;
   width: 100%;
 }
 
@@ -346,7 +376,7 @@ h3 {
 }
 
 .device-editor {
-  max-height: 782px;
+  max-height: 752px;
   overflow: auto;
 }
 
@@ -369,7 +399,7 @@ h3 {
 .table-list,
 .log-stack {
   display: grid;
-  gap: 0.45rem;
+  gap: 0.35rem;
 }
 
 .interface-card,
@@ -379,7 +409,7 @@ h3 {
   background: #f8fafc;
   border: 1px solid #d7dee7;
   border-radius: 0.55rem;
-  padding: 0.55rem;
+  padding: 0.45rem;
 }
 
 .interface-card {
@@ -458,7 +488,7 @@ h3 {
 .endpoint-picker,
 .ping-panel {
   display: grid;
-  gap: 0.75rem;
+  gap: 0.5rem;
 }
 
 .endpoint-picker span {
