@@ -134,6 +134,35 @@ h3 {
   padding: 0.5rem 0.65rem;
 }
 
+.title-stack {
+  align-items: center;
+  display: flex;
+  gap: 0.8rem;
+}
+
+.mode-tabs {
+  background: #eef2f7;
+  border: 1px solid #d7dee7;
+  border-radius: 0.5rem;
+  display: flex;
+  gap: 0.25rem;
+  padding: 0.2rem;
+}
+
+.mode-tabs button {
+  background: transparent;
+  border: 0;
+  border-radius: 0.35rem;
+  color: #475569;
+  padding: 0.36rem 0.55rem;
+}
+
+.mode-tabs button.active {
+  background: #ffffff;
+  color: #17202a;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.12);
+}
+
 .quick-actions {
   display: grid;
   gap: 0.45rem;
@@ -145,6 +174,13 @@ h3 {
   display: grid;
   gap: 0.55rem;
   grid-template-columns: minmax(0, 1fr) 500px;
+}
+
+.aws-workspace {
+  align-items: start;
+  display: grid;
+  gap: 0.55rem;
+  grid-template-columns: minmax(0, 1fr) 420px;
 }
 
 .canvas-card,
@@ -238,6 +274,140 @@ h3 {
   height: 560px;
   overflow: hidden;
   position: relative;
+}
+
+.aws-board {
+  background-color: #fbfcfd;
+  background-image: linear-gradient(#e7edf3 1px, transparent 1px), linear-gradient(90deg, #e7edf3 1px, transparent 1px);
+  background-size: 28px 28px;
+  border-top: 1px solid #d7dee7;
+  height: 560px;
+  overflow: hidden;
+  position: relative;
+}
+
+.aws-lines {
+  height: 100%;
+  inset: 0;
+  position: absolute;
+  width: 100%;
+  z-index: 1;
+}
+
+.aws-lines line {
+  stroke: #94a3b8;
+  stroke-dasharray: 5 5;
+  stroke-linecap: round;
+  stroke-width: 2;
+}
+
+.aws-lines line.success {
+  stroke: #16a34a;
+  stroke-dasharray: none;
+  stroke-width: 4;
+}
+
+.aws-lines line.error {
+  stroke: #dc2626;
+  stroke-dasharray: none;
+  stroke-width: 4;
+}
+
+.aws-vpc,
+.aws-subnet,
+.aws-node {
+  position: absolute;
+  text-align: left;
+}
+
+.aws-vpc {
+  background: rgba(239, 246, 255, 0.55);
+  border: 2px solid #93c5fd;
+  border-radius: 0.8rem;
+  color: #1e3a8a;
+  padding: 0.65rem;
+  z-index: 0;
+}
+
+.aws-subnet {
+  align-items: start;
+  background: rgba(255, 255, 255, 0.76);
+  border: 1px solid #cbd5e1;
+  border-radius: 0.65rem;
+  color: #334155;
+  display: grid;
+  padding: 0.55rem;
+  z-index: 1;
+}
+
+.aws-vpc span,
+.aws-subnet span,
+.aws-node small {
+  color: #64748b;
+  display: block;
+  font-size: 0.72rem;
+  margin-top: 0.15rem;
+}
+
+.aws-node {
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
+  border-left: 5px solid #f59e0b;
+  border-radius: 0.5rem;
+  color: #17202a;
+  display: grid;
+  gap: 0.1rem;
+  min-height: 62px;
+  padding: 0.55rem;
+  width: 118px;
+  z-index: 4;
+}
+
+.aws-node span {
+  color: #b45309;
+  font-size: 0.7rem;
+  font-weight: 900;
+}
+
+.aws-node.internet {
+  border-left-color: #64748b;
+  min-height: 44px;
+  width: 96px;
+}
+
+.aws-node.gateway {
+  border-left-color: #8b5cf6;
+}
+
+.aws-node.alb {
+  border-left-color: #f97316;
+}
+
+.aws-node.ec2 {
+  border-left-color: #22c55e;
+}
+
+.aws-vpc.selected,
+.aws-subnet.selected,
+.aws-node.selected {
+  outline: 4px solid rgba(37, 99, 235, 0.22);
+  border-color: #2563eb;
+}
+
+.aws-vpc.success,
+.aws-subnet.success,
+.aws-node.success,
+.aws-table-card.success {
+  background: #f0fdf4;
+  border-color: #16a34a;
+}
+
+.aws-vpc.error,
+.aws-subnet.error,
+.aws-node.error,
+.aws-table-card.error {
+  background: #fff1f2;
+  border-color: #dc2626;
 }
 
 .board-content {
@@ -552,6 +722,45 @@ h3 {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.aws-bottom-grid {
+  align-items: start;
+  display: grid;
+  gap: 0.55rem;
+  grid-template-columns: 0.8fr 1.15fr 1.35fr;
+}
+
+.aws-route-list {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.aws-table-card {
+  background: #f8fafc;
+  border: 1px solid #d7dee7;
+  border-radius: 0.55rem;
+  display: grid;
+  gap: 0.35rem;
+  padding: 0.5rem;
+}
+
+.aws-table-card p {
+  color: #475569;
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+
+.aws-route-row,
+.two-field-grid {
+  display: grid;
+  gap: 0.45rem;
+  grid-template-columns: 1fr 1fr;
+}
+
+.aws-editor {
+  max-height: 612px;
+  overflow: auto;
+}
+
 .bottom-grid {
   align-items: start;
   grid-template-columns: 1.3fr 0.8fr 1.4fr;
@@ -614,6 +823,8 @@ h3 {
 
 @media (max-width: 1180px) {
   .workspace,
+  .aws-workspace,
+  .aws-bottom-grid,
   .bottom-grid {
     grid-template-columns: 1fr;
   }
@@ -634,6 +845,11 @@ h3 {
     flex-direction: column;
   }
 
+  .title-stack {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
   .quick-actions {
     grid-template-columns: 1fr;
   }
@@ -644,6 +860,8 @@ h3 {
 
   .device-fields,
   .interface-fields,
+  .aws-route-row,
+  .two-field-grid,
   .route-card {
     grid-template-columns: 1fr;
   }

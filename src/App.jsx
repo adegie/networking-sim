@@ -6,6 +6,43 @@ const DEVICE_TYPES = {
   router: { label: 'Router', icon: 'RT', color: '#f7b955', defaultPorts: 2 },
 };
 
+const AWS_INITIAL = {
+  vpcs: [
+    { id: 'vpc-main', name: 'Production VPC', cidr: '10.20.0.0/16', x: 70, y: 60, width: 920, height: 470 },
+  ],
+  subnets: [
+    { id: 'subnet-public', vpcId: 'vpc-main', name: 'Public subnet', cidr: '10.20.1.0/24', az: 'eu-west-1a', routeTableId: 'rt-public', naclId: 'nacl-default', x: 110, y: 135, width: 250, height: 290 },
+    { id: 'subnet-private', vpcId: 'vpc-main', name: 'Private app subnet', cidr: '10.20.2.0/24', az: 'eu-west-1a', routeTableId: 'rt-private', naclId: 'nacl-default', x: 415, y: 135, width: 250, height: 290 },
+    { id: 'subnet-data', vpcId: 'vpc-main', name: 'Data subnet', cidr: '10.20.3.0/24', az: 'eu-west-1a', routeTableId: 'rt-data', naclId: 'nacl-default', x: 720, y: 135, width: 230, height: 290 },
+  ],
+  gateways: [
+    { id: 'igw-main', type: 'igw', name: 'Internet Gateway', vpcId: 'vpc-main', x: 145, y: 75 },
+    { id: 'nat-public', type: 'nat', name: 'NAT Gateway', subnetId: 'subnet-public', privateIp: '10.20.1.5', publicIp: '54.12.0.10', x: 205, y: 335 },
+  ],
+  routeTables: [
+    { id: 'rt-public', name: 'Public RT', routes: [{ destination: '10.20.0.0/16', target: 'local' }, { destination: '0.0.0.0/0', target: 'igw-main' }] },
+    { id: 'rt-private', name: 'Private RT', routes: [{ destination: '10.20.0.0/16', target: 'local' }, { destination: '0.0.0.0/0', target: 'nat-public' }] },
+    { id: 'rt-data', name: 'Data RT', routes: [{ destination: '10.20.0.0/16', target: 'local' }] },
+  ],
+  nacls: [
+    { id: 'nacl-default', name: 'Default NACL', inbound: 'allow', outbound: 'allow' },
+  ],
+  securityGroups: [
+    { id: 'sg-alb', name: 'alb-sg', inbound: [{ protocol: 'HTTP', source: '0.0.0.0/0' }], outbound: [{ protocol: 'ALL', destination: '0.0.0.0/0' }] },
+    { id: 'sg-bastion', name: 'bastion-sg', inbound: [{ protocol: 'ICMP', source: '0.0.0.0/0' }], outbound: [{ protocol: 'ALL', destination: '0.0.0.0/0' }] },
+    { id: 'sg-app', name: 'app-sg', inbound: [{ protocol: 'HTTP', source: 'sg:sg-alb' }, { protocol: 'ICMP', source: '10.20.0.0/16' }], outbound: [{ protocol: 'ALL', destination: '0.0.0.0/0' }] },
+    { id: 'sg-db', name: 'db-sg', inbound: [{ protocol: 'MYSQL', source: 'sg:sg-app' }], outbound: [{ protocol: 'ALL', destination: '10.20.0.0/16' }] },
+  ],
+  instances: [
+    { id: 'ec2-bastion', name: 'Bastion EC2', subnetId: 'subnet-public', privateIp: '10.20.1.20', publicIp: '54.12.0.20', securityGroupIds: ['sg-bastion'], x: 190, y: 205 },
+    { id: 'ec2-app', name: 'App EC2', subnetId: 'subnet-private', privateIp: '10.20.2.10', publicIp: '', securityGroupIds: ['sg-app'], x: 500, y: 240 },
+    { id: 'ec2-db', name: 'Database EC2', subnetId: 'subnet-data', privateIp: '10.20.3.10', publicIp: '', securityGroupIds: ['sg-db'], x: 800, y: 240 },
+  ],
+  loadBalancers: [
+    { id: 'alb-public', name: 'Public ALB', type: 'alb', scheme: 'internet-facing', subnetIds: ['subnet-public'], privateIp: '10.20.1.10', dnsName: 'app.example.aws', securityGroupIds: ['sg-alb'], targetIds: ['ec2-app'], x: 210, y: 135 },
+  ],
+};
+
 const INITIAL_DEVICES = [
   {
     id: 'pc-a',
@@ -321,6 +358,216 @@ function ipPrefixParts(ip, mask) {
   };
 }
 
+function cloneAwsTopology() {
+  return JSON.parse(JSON.stringify(AWS_INITIAL));
+}
+
+function cidrToIpMask(cidr) {
+  const [ip, bits = '32'] = cidr.split('/');
+  return { ip, mask: `/${bits}`, bits: Number(bits) };
+}
+
+function ipInCidr(ip, cidr) {
+  const parsedIp = parseIPv4(ip);
+  const { ip: networkIp, mask } = cidrToIpMask(cidr);
+  const parsedNetwork = parseIPv4(networkIp);
+  const parsedMask = parseMask(mask);
+  if (parsedIp === null || parsedNetwork === null || parsedMask === null) return false;
+  return (parsedIp & parsedMask) === (parsedNetwork & parsedMask);
+}
+
+function awsResourceId(resource) {
+  return resource?.id || '';
+}
+
+function findAwsResource(aws, id) {
+  if (id === 'internet') return { id: 'internet', type: 'internet', name: 'Internet', x: 25, y: 40 };
+  return (
+    aws.instances.find((item) => item.id === id) ||
+    aws.loadBalancers.find((item) => item.id === id) ||
+    aws.gateways.find((item) => item.id === id) ||
+    aws.subnets.find((item) => item.id === id) ||
+    aws.vpcs.find((item) => item.id === id)
+  );
+}
+
+function awsSubnetOf(aws, resource) {
+  if (!resource) return null;
+  if (resource.subnetId) return aws.subnets.find((item) => item.id === resource.subnetId);
+  if (resource.subnetIds?.length) return aws.subnets.find((item) => item.id === resource.subnetIds[0]);
+  return null;
+}
+
+function awsVpcOf(aws, resource) {
+  const subnet = awsSubnetOf(aws, resource);
+  if (subnet) return aws.vpcs.find((item) => item.id === subnet.vpcId);
+  if (resource?.vpcId) return aws.vpcs.find((item) => item.id === resource.vpcId);
+  return aws.vpcs[0];
+}
+
+function awsRouteTableForSubnet(aws, subnetId) {
+  const subnet = aws.subnets.find((item) => item.id === subnetId);
+  return aws.routeTables.find((item) => item.id === subnet?.routeTableId);
+}
+
+function awsBestRoute(routeTable, destinationIp) {
+  if (!routeTable) return null;
+  return [...routeTable.routes]
+    .filter((route) => (route.destination === 'local' ? ipInCidr(destinationIp, AWS_INITIAL.vpcs[0].cidr) : ipInCidr(destinationIp, route.destination)))
+    .sort((a, b) => cidrToIpMask(b.destination === 'local' ? AWS_INITIAL.vpcs[0].cidr : b.destination).bits - cidrToIpMask(a.destination === 'local' ? AWS_INITIAL.vpcs[0].cidr : a.destination).bits)[0];
+}
+
+function awsProtocolPort(protocol) {
+  if (protocol === 'HTTP') return 80;
+  if (protocol === 'MYSQL') return 3306;
+  return 0;
+}
+
+function awsRuleMatches(rule, protocol, peer) {
+  if (rule.protocol !== 'ALL' && rule.protocol !== protocol) return false;
+  const value = rule.source || rule.destination || '';
+  if (value === '0.0.0.0/0') return true;
+  if (value.startsWith('sg:')) return peer.securityGroupIds?.includes(value.slice(3));
+  if (peer.ip && ipInCidr(peer.ip, value)) return true;
+  return false;
+}
+
+function awsSecurityGroupAllows(aws, securityGroupIds, direction, protocol, peer) {
+  const groups = securityGroupIds.map((id) => aws.securityGroups.find((group) => group.id === id)).filter(Boolean);
+  return groups.some((group) => (group[direction] || []).some((rule) => awsRuleMatches(rule, protocol, peer)));
+}
+
+function awsNaclAllows(aws, subnetId) {
+  const subnet = aws.subnets.find((item) => item.id === subnetId);
+  const nacl = aws.nacls.find((item) => item.id === subnet?.naclId);
+  return !nacl || (nacl.inbound === 'allow' && nacl.outbound === 'allow');
+}
+
+function simulateAwsTraffic(aws, sourceId, targetId, protocol) {
+  const trace = [];
+  const visual = { resources: {}, subnets: {}, vpcs: {}, routes: {} };
+  const mark = (kind, ids, status = 'success') => ids.filter(Boolean).forEach((id) => {
+    visual[kind][id] = status;
+  });
+  const markResource = (ids, status = 'success') => mark('resources', ids, status);
+  const markSubnet = (ids, status = 'success') => mark('subnets', ids, status);
+  const markVpc = (ids, status = 'success') => mark('vpcs', ids, status);
+  const markRoute = (ids, status = 'success') => mark('routes', ids, status);
+
+  const source = findAwsResource(aws, sourceId);
+  const target = findAwsResource(aws, targetId);
+  if (!source || !target) return { ok: false, trace: ['Source or target does not exist.'], visual };
+  if (source.id === target.id) return { ok: false, trace: ['Choose different source and target resources.'], visual };
+
+  const targetIp = target.privateIp || target.publicIp;
+  const sourceIp = source.privateIp || source.publicIp || '0.0.0.0';
+  const targetSubnet = awsSubnetOf(aws, target);
+  const sourceSubnet = awsSubnetOf(aws, source);
+  const vpc = awsVpcOf(aws, target) || awsVpcOf(aws, source);
+  markVpc([vpc?.id]);
+
+  trace.push(`${source.name} sends ${protocol}${awsProtocolPort(protocol) ? `:${awsProtocolPort(protocol)}` : ''} traffic to ${target.name}.`);
+
+  const fail = (message, ids = []) => {
+    trace.push(message);
+    markResource(ids, 'error');
+    return { ok: false, trace, visual };
+  };
+
+  const checkTargetSecurity = (targetResource, peer, why = 'inbound') => {
+    if (!targetResource.securityGroupIds?.length) return true;
+    const allowed = awsSecurityGroupAllows(aws, targetResource.securityGroupIds, 'inbound', protocol, peer);
+    trace.push(`${targetResource.name} security group ${allowed ? 'allows' : 'blocks'} ${why} ${protocol} from ${peer.name || peer.ip}.`);
+    return allowed;
+  };
+
+  if (source.id === 'internet') {
+    markResource(['internet']);
+    if (target.type === 'alb') {
+      markResource([target.id, 'igw-main']);
+      markSubnet(target.subnetIds || []);
+      if (target.scheme !== 'internet-facing') return fail(`${target.name} is internal and cannot receive Internet traffic.`, [target.id]);
+      if (!awsNaclAllows(aws, target.subnetIds[0])) return fail(`${target.name} subnet NACL blocks the request.`, [target.id]);
+      if (!checkTargetSecurity(target, { name: 'Internet', ip: '8.8.8.8', securityGroupIds: [] }, 'Internet')) return fail(`${target.name} security group rejected the request.`, [target.id]);
+      const targetInstance = aws.instances.find((item) => target.targetIds.includes(item.id));
+      if (!targetInstance) return fail(`${target.name} has no registered targets.`, [target.id]);
+      markResource([targetInstance.id]);
+      markSubnet([targetInstance.subnetId]);
+      if (!checkTargetSecurity(targetInstance, { name: target.name, ip: target.privateIp, securityGroupIds: target.securityGroupIds }, 'ALB target')) return fail(`${targetInstance.name} security group rejected traffic from ${target.name}.`, [targetInstance.id]);
+      trace.push(`${target.name} forwards to target ${targetInstance.name}; response returns through the ALB and Internet Gateway.`);
+      return { ok: true, trace, visual };
+    }
+
+    if (target.type !== 'internet' && !target.publicIp) return fail(`${target.name} has no public address or public load balancer entry point.`, [target.id]);
+    markResource([target.id, 'igw-main']);
+    markSubnet([targetSubnet?.id]);
+    if (!checkTargetSecurity(target, { name: 'Internet', ip: '8.8.8.8', securityGroupIds: [] }, 'Internet')) return fail(`${target.name} security group rejected Internet traffic.`, [target.id]);
+    trace.push(`Internet Gateway delivers traffic to ${target.name}.`);
+    return { ok: true, trace, visual };
+  }
+
+  if (source.type === 'internet') return fail('Internet cannot be used as an internal AWS source here.', ['internet']);
+  markResource([source.id]);
+  markSubnet([sourceSubnet?.id]);
+  if (!awsNaclAllows(aws, sourceSubnet?.id)) return fail(`${sourceSubnet?.name || 'Source subnet'} NACL blocks outbound or inbound return traffic.`, [source.id]);
+  if (source.securityGroupIds?.length && !awsSecurityGroupAllows(aws, source.securityGroupIds, 'outbound', protocol, { name: target.name, ip: targetIp, securityGroupIds: target.securityGroupIds || [] })) {
+    return fail(`${source.name} security group blocks outbound ${protocol}.`, [source.id]);
+  }
+
+  if (target.id === 'internet') {
+    const routeTable = awsRouteTableForSubnet(aws, sourceSubnet?.id);
+    const route = awsBestRoute(routeTable, '1.1.1.1');
+    markRoute([routeTable?.id]);
+    if (!route || route.target === 'local') return fail(`${sourceSubnet?.name} has no default route to the Internet.`, [source.id]);
+    trace.push(`${routeTable.name} sends 0.0.0.0/0 traffic to ${route.target}.`);
+    if (route.target.startsWith('nat')) {
+      const nat = aws.gateways.find((item) => item.id === route.target);
+      const natSubnet = aws.subnets.find((item) => item.id === nat?.subnetId);
+      markResource([nat?.id, 'igw-main', 'internet']);
+      markSubnet([natSubnet?.id]);
+      trace.push(`${nat.name} translates ${source.privateIp} to public IP ${nat.publicIp}.`);
+      trace.push(`${natSubnet.name} route table reaches the Internet Gateway.`);
+      return { ok: true, trace, visual };
+    }
+    if (route.target.startsWith('igw')) {
+      if (!source.publicIp) return fail(`${source.name} uses an Internet Gateway route but has no public IP.`, [source.id, route.target]);
+      markResource([route.target, 'internet']);
+      trace.push(`Internet Gateway forwards traffic using ${source.name}'s public IP ${source.publicIp}.`);
+      return { ok: true, trace, visual };
+    }
+    return fail(`Unsupported route target ${route.target}.`, [source.id]);
+  }
+
+  if (target.type === 'alb') {
+    markResource([target.id]);
+    markSubnet(target.subnetIds || []);
+    if (!checkTargetSecurity(target, { name: source.name, ip: sourceIp, securityGroupIds: source.securityGroupIds || [] }, 'client')) return fail(`${target.name} security group rejected ${source.name}.`, [target.id]);
+    const targetInstance = aws.instances.find((item) => target.targetIds.includes(item.id));
+    if (!targetInstance) return fail(`${target.name} has no registered targets.`, [target.id]);
+    if (!checkTargetSecurity(targetInstance, { name: target.name, ip: target.privateIp, securityGroupIds: target.securityGroupIds }, 'ALB target')) return fail(`${targetInstance.name} security group rejected ${target.name}.`, [targetInstance.id]);
+    markResource([targetInstance.id]);
+    markSubnet([targetInstance.subnetId]);
+    trace.push(`${target.name} accepts the request and forwards it to ${targetInstance.name}.`);
+    return { ok: true, trace, visual };
+  }
+
+  if (targetSubnet && sourceSubnet && awsVpcOf(aws, source)?.id === awsVpcOf(aws, target)?.id) {
+    const routeTable = awsRouteTableForSubnet(aws, sourceSubnet.id);
+    const route = awsBestRoute(routeTable, target.privateIp);
+    markRoute([routeTable?.id]);
+    if (!route || route.target !== 'local') return fail(`${sourceSubnet.name} does not route ${target.privateIp} locally.`, [source.id]);
+    trace.push(`${routeTable.name} uses the VPC local route for ${target.privateIp}.`);
+    markResource([target.id]);
+    markSubnet([targetSubnet.id]);
+    if (!awsNaclAllows(aws, targetSubnet.id)) return fail(`${targetSubnet.name} NACL blocks the traffic.`, [target.id]);
+    if (!checkTargetSecurity(target, { name: source.name, ip: sourceIp, securityGroupIds: source.securityGroupIds || [] }, 'VPC')) return fail(`${target.name} security group rejected ${source.name}.`, [target.id]);
+    trace.push(`${target.name} receives the traffic over the VPC local route.`);
+    return { ok: true, trace, visual };
+  }
+
+  return fail('No supported AWS path was found for this request.', [source.id, target.id]);
+}
+
 function simulatePing(devices, links, sourceDeviceId, destinationIp) {
   const trace = [];
   const visual = { nodes: {}, links: {} };
@@ -529,10 +776,12 @@ function validateTopologyPayload(payload) {
       natTranslations: Array.isArray(device.natTranslations) ? device.natTranslations : [],
     })),
     links: topology.links,
+    awsTopology: topology.awsTopology,
   };
 }
 
 function App() {
+  const [labMode, setLabMode] = useState('ethernet');
   const [devices, setDevices] = useState(INITIAL_DEVICES);
   const [links, setLinks] = useState(INITIAL_LINKS);
   const [selectedId, setSelectedId] = useState(INITIAL_DEVICES[0].id);
@@ -547,6 +796,7 @@ function App() {
   const [pingVisual, setPingVisual] = useState({ nodes: {}, links: {} });
   const [dragging, setDragging] = useState(null);
   const [contextMenu, setContextMenu] = useState(null);
+  const [awsTopology, setAwsTopology] = useState(() => cloneAwsTopology());
   const boardRef = useRef(null);
 
   const selected = devices.find((device) => device.id === selectedId) || devices[0];
@@ -866,6 +1116,7 @@ function App() {
       exportedAt: new Date().toISOString(),
       devices,
       links,
+      awsTopology,
     };
     try {
       await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
@@ -890,6 +1141,7 @@ function App() {
       const firstPingSource = imported.devices.find((device) => device.type !== 'switch') || firstDevice;
       setDevices(imported.devices);
       setLinks(imported.links);
+      if (imported.awsTopology) setAwsTopology(imported.awsTopology);
       setPingVisual({ nodes: {}, links: {} });
       setSelectedId(firstDevice?.id || '');
       setLinkDraft({ fromDevice: '', fromInterface: '', toDevice: '', toInterface: '' });
@@ -909,19 +1161,28 @@ function App() {
   return (
     <main className="app-shell">
       <header className="top-bar">
-        <h1>Ethernet Network Playground</h1>
-        <div className="quick-actions" aria-label="Add device">
-          <select value={newType} onChange={(event) => setNewType(event.target.value)}>
-            {Object.entries(DEVICE_TYPES).map(([key, value]) => (
-              <option key={key} value={key}>{value.label}</option>
-            ))}
-          </select>
-          <button onClick={() => addDevice()}>Add device</button>
-          <button className="ghost" onClick={exportTopology}>Export JSON</button>
-          <button className="ghost" onClick={loadTopology}>Load JSON</button>
+        <div className="title-stack">
+          <h1>Network Playground</h1>
+          <div className="mode-tabs" role="tablist" aria-label="Lab mode">
+            <button className={labMode === 'ethernet' ? 'active' : ''} onClick={() => setLabMode('ethernet')}>Ethernet Lab</button>
+            <button className={labMode === 'aws' ? 'active' : ''} onClick={() => setLabMode('aws')}>AWS Lab</button>
+          </div>
         </div>
+        {labMode === 'ethernet' && (
+          <div className="quick-actions" aria-label="Add device">
+            <select value={newType} onChange={(event) => setNewType(event.target.value)}>
+              {Object.entries(DEVICE_TYPES).map(([key, value]) => (
+                <option key={key} value={key}>{value.label}</option>
+              ))}
+            </select>
+            <button onClick={() => addDevice()}>Add device</button>
+            <button className="ghost" onClick={exportTopology}>Export JSON</button>
+            <button className="ghost" onClick={loadTopology}>Load JSON</button>
+          </div>
+        )}
       </header>
 
+      {labMode === 'ethernet' ? <>
       <section className="workspace">
         <div className="canvas-card">
           <div className="card-heading">
@@ -1092,6 +1353,7 @@ function App() {
           </div>
         </div>
       </section>
+      </> : <AwsLab aws={awsTopology} setAws={setAwsTopology} />}
     </main>
   );
 }
@@ -1128,6 +1390,247 @@ function FormattedIp({ ip, mask }) {
       })}
       <span className="ip-prefix">/{parts.bits}</span>
     </span>
+  );
+}
+
+function AwsLab({ aws, setAws }) {
+  const [selectedId, setSelectedId] = useState('vpc-main');
+  const [traffic, setTraffic] = useState({ source: 'internet', target: 'alb-public', protocol: 'HTTP' });
+  const [trace, setTrace] = useState([{ id: 'aws-welcome', ok: true, title: 'AWS Lab ready', lines: ['Try Internet -> Public ALB over HTTP, App EC2 -> Internet over HTTP, or App EC2 -> Database EC2 over MYSQL.'] }]);
+  const [visual, setVisual] = useState({ resources: {}, subnets: {}, vpcs: {}, routes: {} });
+
+  const resources = [
+    { id: 'internet', name: 'Internet', type: 'internet' },
+    ...aws.loadBalancers.map((item) => ({ ...item, type: 'alb' })),
+    ...aws.instances.map((item) => ({ ...item, type: 'ec2' })),
+  ];
+  const selected = findAwsResource(aws, selectedId);
+
+  const updateAwsCollectionItem = (collection, id, patch) => {
+    setAws((current) => ({
+      ...current,
+      [collection]: current[collection].map((item) => (item.id === id ? { ...item, ...patch } : item)),
+    }));
+  };
+
+  const updateRoute = (routeTableId, index, patch) => {
+    setAws((current) => ({
+      ...current,
+      routeTables: current.routeTables.map((table) =>
+        table.id === routeTableId
+          ? { ...table, routes: table.routes.map((route, routeIndex) => (routeIndex === index ? { ...route, ...patch } : route)) }
+          : table,
+      ),
+    }));
+  };
+
+  const runAwsTraffic = () => {
+    const result = simulateAwsTraffic(aws, traffic.source, traffic.target, traffic.protocol);
+    const source = findAwsResource(aws, traffic.source)?.name || 'Unknown';
+    const target = findAwsResource(aws, traffic.target)?.name || 'Unknown';
+    setVisual(result.visual);
+    setTrace((items) => [{ id: `aws-${Date.now()}`, ok: result.ok, title: `${source} -> ${target} ${result.ok ? 'allowed' : 'blocked'}`, lines: result.trace }, ...items]);
+  };
+
+  const resetAws = () => {
+    setAws(cloneAwsTopology());
+    setSelectedId('vpc-main');
+    setVisual({ resources: {}, subnets: {}, vpcs: {}, routes: {} });
+    setTrace([{ id: `aws-reset-${Date.now()}`, ok: true, title: 'AWS topology reset', lines: ['Default VPC scenario restored.'] }]);
+  };
+
+  const awsLines = [
+    ['internet', 'igw-main'],
+    ['igw-main', 'alb-public'],
+    ['alb-public', 'ec2-app'],
+    ['ec2-app', 'ec2-db'],
+    ['ec2-app', 'nat-public'],
+    ['nat-public', 'igw-main'],
+  ];
+
+  return (
+    <>
+      <section className="aws-workspace">
+        <div className="canvas-card">
+          <div className="card-heading">
+            <div className="topology-title">
+              <h2>AWS VPC Topology</h2>
+              <span>{aws.vpcs.length} VPC / {aws.subnets.length} subnets / {aws.instances.length} EC2</span>
+            </div>
+            <button className="ghost" onClick={resetAws}>Reset AWS</button>
+          </div>
+          <div className="aws-board">
+            <svg className="aws-lines" aria-hidden="true">
+              {awsLines.map(([fromId, toId]) => {
+                const from = findAwsResource(aws, fromId);
+                const to = findAwsResource(aws, toId);
+                if (!from || !to) return null;
+                const active = visual.resources[fromId] && visual.resources[toId] ? visual.resources[toId] : '';
+                return <line key={`${fromId}-${toId}`} className={active} x1={(from.x || 0) + 42} y1={(from.y || 0) + 28} x2={(to.x || 0) + 42} y2={(to.y || 0) + 28} />;
+              })}
+            </svg>
+            <button className={`aws-node internet ${visual.resources.internet || ''}`} style={{ left: 25, top: 40 }} onClick={() => setSelectedId('internet')}>Internet</button>
+            {aws.vpcs.map((vpc) => (
+              <button key={vpc.id} className={`aws-vpc ${visual.vpcs[vpc.id] || ''} ${selectedId === vpc.id ? 'selected' : ''}`} style={{ left: vpc.x, top: vpc.y, width: vpc.width, height: vpc.height }} onClick={() => setSelectedId(vpc.id)}>
+                <strong>{vpc.name}</strong><span>{vpc.cidr}</span>
+              </button>
+            ))}
+            {aws.subnets.map((subnet) => (
+              <button key={subnet.id} className={`aws-subnet ${visual.subnets[subnet.id] || ''} ${selectedId === subnet.id ? 'selected' : ''}`} style={{ left: subnet.x, top: subnet.y, width: subnet.width, height: subnet.height }} onClick={() => setSelectedId(subnet.id)}>
+                <strong>{subnet.name}</strong><span>{subnet.cidr} / {subnet.az}</span>
+              </button>
+            ))}
+            {aws.gateways.map((gateway) => (
+              <button key={gateway.id} className={`aws-node gateway ${visual.resources[gateway.id] || ''} ${selectedId === gateway.id ? 'selected' : ''}`} style={{ left: gateway.x, top: gateway.y }} onClick={() => setSelectedId(gateway.id)}>
+                <span>{gateway.type.toUpperCase()}</span><strong>{gateway.name}</strong>
+              </button>
+            ))}
+            {aws.loadBalancers.map((lb) => (
+              <button key={lb.id} className={`aws-node alb ${visual.resources[lb.id] || ''} ${selectedId === lb.id ? 'selected' : ''}`} style={{ left: lb.x, top: lb.y }} onClick={() => setSelectedId(lb.id)}>
+                <span>ALB</span><strong>{lb.name}</strong><small>{lb.dnsName}</small>
+              </button>
+            ))}
+            {aws.instances.map((instance) => (
+              <button key={instance.id} className={`aws-node ec2 ${visual.resources[instance.id] || ''} ${selectedId === instance.id ? 'selected' : ''}`} style={{ left: instance.x, top: instance.y }} onClick={() => setSelectedId(instance.id)}>
+                <span>EC2</span><strong>{instance.name}</strong><small>{instance.privateIp}</small>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <aside className="panel aws-editor">
+          <AwsResourceEditor aws={aws} selected={selected} onUpdate={updateAwsCollectionItem} />
+        </aside>
+      </section>
+
+      <section className="aws-bottom-grid">
+        <div className="panel ping-panel">
+          <h2>AWS Traffic</h2>
+          <label>
+            Source
+            <select value={traffic.source} onChange={(event) => setTraffic({ ...traffic, source: event.target.value })}>
+              {resources.map((resource) => <option key={resource.id} value={resource.id}>{resource.name}</option>)}
+            </select>
+          </label>
+          <label>
+            Target
+            <select value={traffic.target} onChange={(event) => setTraffic({ ...traffic, target: event.target.value })}>
+              {resources.map((resource) => <option key={resource.id} value={resource.id}>{resource.name}</option>)}
+            </select>
+          </label>
+          <label>
+            Protocol
+            <select value={traffic.protocol} onChange={(event) => setTraffic({ ...traffic, protocol: event.target.value })}>
+              <option value="HTTP">HTTP :80</option>
+              <option value="ICMP">ICMP</option>
+              <option value="MYSQL">MYSQL :3306</option>
+            </select>
+          </label>
+          <button onClick={runAwsTraffic}>Simulate AWS path</button>
+        </div>
+
+        <div className="panel aws-routes-panel">
+          <h2>Route Tables</h2>
+          <div className="aws-route-list">
+            {aws.routeTables.map((table) => (
+              <div key={table.id} className={`aws-table-card ${visual.routes[table.id] || ''}`}>
+                <strong>{table.name}</strong>
+                {table.routes.map((route, index) => (
+                  <div key={`${table.id}-${index}`} className="aws-route-row">
+                    <input value={route.destination} onChange={(event) => updateRoute(table.id, index, { destination: event.target.value })} />
+                    <input value={route.target} onChange={(event) => updateRoute(table.id, index, { target: event.target.value })} />
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="panel log-panel">
+          <div className="card-heading compact">
+            <h2>AWS Trace</h2>
+            <button className="ghost" onClick={() => { setTrace([]); setVisual({ resources: {}, subnets: {}, vpcs: {}, routes: {} }); }}>Clear</button>
+          </div>
+          <div className="log-stack">
+            {trace.map((entry) => (
+              <article key={entry.id} className={`log-entry ${entry.ok ? 'ok' : 'bad'}`}>
+                <strong>{entry.title}</strong>
+                {entry.lines.map((line, index) => <p key={`${entry.id}-${index}`}>{line}</p>)}
+              </article>
+            ))}
+          </div>
+        </div>
+      </section>
+    </>
+  );
+}
+
+function AwsResourceEditor({ aws, selected, onUpdate }) {
+  if (!selected) return <p className="muted">Select an AWS object.</p>;
+  const collection = selected.type === 'alb' ? 'loadBalancers' : selected.type === 'igw' || selected.type === 'nat' ? 'gateways' : selected.privateIp !== undefined ? 'instances' : selected.cidr && selected.routeTableId ? 'subnets' : selected.cidr ? 'vpcs' : null;
+  const securityGroups = selected.securityGroupIds?.map((id) => aws.securityGroups.find((group) => group.id === id)).filter(Boolean) || [];
+  const subnet = awsSubnetOf(aws, selected);
+  const routeTable = selected.routeTableId ? aws.routeTables.find((table) => table.id === selected.routeTableId) : subnet ? awsRouteTableForSubnet(aws, subnet.id) : null;
+
+  if (selected.id === 'internet') {
+    return (
+      <>
+        <h2>Internet</h2>
+        <p className="muted">External clients can reach public IPs, internet-facing ALBs, and resources routed through an Internet Gateway.</p>
+      </>
+    );
+  }
+
+  return (
+    <>
+      <div className="card-heading compact">
+        <div>
+          <h2>AWS Resource</h2>
+          <p>{selected.type || 'network'}</p>
+        </div>
+      </div>
+      {collection && (
+        <label>
+          Name
+          <input value={selected.name} onChange={(event) => onUpdate(collection, selected.id, { name: event.target.value })} />
+        </label>
+      )}
+      {'cidr' in selected && collection && (
+        <label>
+          CIDR
+          <input value={selected.cidr} onChange={(event) => onUpdate(collection, selected.id, { cidr: event.target.value })} />
+        </label>
+      )}
+      {'privateIp' in selected && collection && (
+        <div className="two-field-grid">
+          <label>
+            Private IP
+            <input value={selected.privateIp || ''} onChange={(event) => onUpdate(collection, selected.id, { privateIp: event.target.value })} />
+          </label>
+          <label>
+            Public IP
+            <input value={selected.publicIp || ''} onChange={(event) => onUpdate(collection, selected.id, { publicIp: event.target.value })} />
+          </label>
+        </div>
+      )}
+      {subnet && <p className="muted">Subnet: {subnet.name} ({subnet.cidr})</p>}
+      {routeTable && <p className="muted">Route table: {routeTable.name}</p>}
+      {!!securityGroups.length && (
+        <section>
+          <h3>Security Groups</h3>
+          <div className="table-list">
+            {securityGroups.map((group) => (
+              <div key={group.id} className="aws-table-card">
+                <strong>{group.name}</strong>
+                <p>Inbound: {group.inbound.map((rule) => `${rule.protocol} from ${rule.source}`).join(', ') || 'none'}</p>
+                <p>Outbound: {group.outbound.map((rule) => `${rule.protocol} to ${rule.destination}`).join(', ') || 'none'}</p>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+      {selected.targetIds?.length > 0 && <p className="muted">Targets: {selected.targetIds.map((id) => findAwsResource(aws, id)?.name || id).join(', ')}</p>}
+    </>
   );
 }
 

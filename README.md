@@ -1,6 +1,6 @@
 # Ethernet Network Playground
 
-A browser playground for experimenting with small Ethernet/IP networks. You can add hosts, switches, and routers; wire ports together; configure IPv4 addresses, masks, gateways, static routes, and ARP entries; then run simulated pings with packet traces.
+A browser playground for experimenting with Ethernet/IP networks and AWS VPC networking. The Ethernet lab supports hosts, switches, routers, ARP, NAT, and pings. The AWS lab models VPCs, subnets, route tables, IGWs, NAT Gateways, ALBs, EC2 instances, security groups, and packet traces.
 
 ## Run
 
@@ -25,3 +25,5 @@ Use `preview:pages` to inspect the generated `publish/` output locally. Opening 
 - Router connected routes and static routes
 - ARP request/reply and ARP cache updates
 - ICMP echo path tracing with common failure explanations
+- AWS VPC CIDRs, public/private/data subnets, and route tables
+- AWS Internet Gateway, NAT Gateway, ALB, EC2, security group, and NACL path checks
